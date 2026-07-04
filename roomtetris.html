@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RoomTetris — 마커 가구 배치 앱</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<!-- js-aruco2: marker detection (cv+aruco) and 3D pose estimation (svd+posit) -->
+<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/svd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/posit1.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  :root { --accent:#0066FF; --pos:#00BF40; --neg:#FF4242; --ink:#111; --muted:#6b7280; --line:rgba(0,0,0,0.08); --sb:54px; }
+  html,body { height:100%; }
+  body {
+    background:#0066FF;
+    font-family:'Pretendard Variable',Pretendard,-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+    display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* iOS device frame (desktop preview) */
+  .rt-device{ width:402px; height:874px; border-radius:52px; overflow:hidden; position:relative; font-family:inherit;
+    box-shadow:0 40px 90px rgba(0,0,0,.35), 0 0 0 10px #1b1b1f, 0 0 0 11px #333; }
+  .rt-device.dark{ background:#000; }
+  .rt-device.light{ background:#F2F2F7; }
+  .rt-island{ position:absolute; top:11px; left:50%; transform:translateX(-50%); width:126px; height:36px; border-radius:24px; background:#000; z-index:50; }
+  .rt-home{ position:absolute; bottom:9px; left:50%; transform:translateX(-50%); width:139px; height:5px; border-radius:99px; z-index:60; pointer-events:none; }
+  /* phone: fill the real screen, hide fake chrome, respect safe areas */
+  @media (max-width:480px){
+    body{ padding:0; align-items:stretch; justify-content:stretch; }
+    :root{ --sb: env(safe-area-inset-top, 0px); }
+    .rt-device{ width:100vw; height:100vh; height:100dvh; border-radius:0; box-shadow:none; }
+    .rt-island, .rt-home, .rt-statusbar{ display:none; }
+    .rt-footer{ padding-bottom: calc(30px + env(safe-area-inset-bottom, 0px)) !important; }
+  }
+  input[type=range]{ -webkit-appearance:none; appearance:none; height:4px; border-radius:99px; background:#e5e7eb; outline:none; }
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:24px; height:24px; border-radius:50%; background:#fff; border:2px solid var(--accent); box-shadow:0 1px 4px rgba(0,0,0,.2); cursor:pointer; }
+  input[type=range]::-moz-range-thumb{ width:24px; height:24px; border-radius:50%; background:#fff; border:2px solid var(--accent); cursor:pointer; }
+  @keyframes scanpulse { 0%,100%{opacity:.35} 50%{opacity:.9} }
+  @keyframes sweep { 0%{transform:translateY(-100%)} 100%{transform:translateY(500%)} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useRef, useEffect, Fragment } = React;
+
+/* ─── design-system-like primitives (standalone replacements for Wanted WDS) ─── */
+const Type = ({ v='body', weight, color, children, style }) => {
+  const sizes = { title1:{fontSize:28,lineHeight:'36px'}, title2:{fontSize:24,lineHeight:'32px'},
+    title3:{fontSize:19,lineHeight:'26px'}, body:{fontSize:15,lineHeight:'22px'},
+    body2:{fontSize:14,lineHeight:'20px'}, caption:{fontSize:12,lineHeight:'16px'} };
+  return <div style={{color:color||'var(--ink)',fontWeight:weight==='bold'?700:weight||500,...sizes[v],...style}}>{children}</div>;
+};
+const Btn = ({ children, onClick, variant='solid', size='large', full=true, disabled, style }) => {
+  const base = { border:'none', borderRadius:14, fontWeight:700, cursor:disabled?'default':'pointer',
+    width:full?'100%':'auto', fontFamily:'inherit', transition:'transform .08s, opacity .15s',
+    opacity:disabled?0.4:1, padding:size==='large'?'15px 20px':'9px 16px', fontSize:size==='large'?16:14 };
+  const variants = {
+    solid:{ background:'var(--accent)', color:'#fff' },
+    outlined:{ background:'#fff', color:'var(--accent)', boxShadow:'inset 0 0 0 1.5px var(--accent)' },
+    ghost:{ background:'rgba(0,102,255,0.08)', color:'var(--accent)' },
+  };
+  return <button disabled={disabled} onClick={onClick}
+    onMouseDown={e=>!disabled&&(e.currentTarget.style.transform='scale(0.98)')}
+    onMouseUp={e=>e.currentTarget.style.transform='scale(1)'}
+    onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}
+    style={{...base,...variants[variant],...style}}>{children}</button>;
+};
+const Badge = ({ children, color='var(--accent)', bg, size='small' }) => (
+  <span style={{ display:'inline-flex', alignItems:'center', gap:4, background:bg||'rgba(0,102,255,0.1)',
+    color, fontWeight:700, borderRadius:8, padding:size==='xsmall'?'2px 6px':'4px 9px',
+    fontSize:size==='xsmall'?11:12, lineHeight:1.2, whiteSpace:'nowrap' }}>{children}</span>
+);
+const Chip = ({ label, active, onClick }) => (
+  <button onClick={onClick} style={{ border:'none', cursor:'pointer', fontFamily:'inherit',
+    padding:'8px 15px', borderRadius:99, fontSize:14, fontWeight:600, whiteSpace:'nowrap',
+    background:active?'var(--accent)':'#fff', color:active?'#fff':'#374151',
+    boxShadow:active?'none':'inset 0 0 0 1px var(--line)' }}>{label}</button>
+);
+const SectionMessage = ({ title, children }) => (
+  <div style={{ display:'flex', gap:10, background:'rgba(0,102,255,0.06)', border:'1px solid rgba(0,102,255,0.15)',
+    borderRadius:14, padding:'12px 14px' }}>
+    <div style={{ width:18, height:18, borderRadius:'50%', background:'var(--accent)', color:'#fff',
+      fontSize:12, fontWeight:800, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginTop:1 }}>i</div>
+    <div>
+      <div style={{ fontWeight:700, fontSize:13.5, color:'#1e3a8a' }}>{title}</div>
+      <div style={{ fontSize:13, color:'#3b5bb8', marginTop:2, lineHeight:1.45 }}>{children}</div>
+    </div>
+  </div>
+);
+
+/* ─── iOS device frame (ported from ios-frame.jsx) ─── */
+function StatusBar({ dark }) {
+  const c = dark ? '#fff' : '#000';
+  return (
+    <div className="rt-statusbar" style={{ position:'absolute', top:0, left:0, right:0, zIndex:30, height:54,
+      display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 30px 0 34px' }}>
+      <span style={{ fontWeight:600, fontSize:16, color:c, marginTop:6 }}>9:41</span>
+      <div style={{ display:'flex', gap:7, alignItems:'center', marginTop:6 }}>
+        <svg width="19" height="12" viewBox="0 0 19 12"><rect x="0" y="7.5" width="3.2" height="4.5" rx=".7" fill={c}/><rect x="4.8" y="5" width="3.2" height="7" rx=".7" fill={c}/><rect x="9.6" y="2.5" width="3.2" height="9.5" rx=".7" fill={c}/><rect x="14.4" y="0" width="3.2" height="12" rx=".7" fill={c}/></svg>
+        <svg width="17" height="12" viewBox="0 0 17 12"><path d="M8.5 3.2C10.8 3.2 12.9 4.1 14.4 5.6L15.5 4.5C13.7 2.7 11.2 1.5 8.5 1.5 5.8 1.5 3.3 2.7 1.5 4.5L2.6 5.6C4.1 4.1 6.2 3.2 8.5 3.2Z" fill={c}/><circle cx="8.5" cy="10.5" r="1.5" fill={c}/></svg>
+        <svg width="27" height="13" viewBox="0 0 27 13"><rect x=".5" y=".5" width="23" height="12" rx="3.5" stroke={c} strokeOpacity=".35" fill="none"/><rect x="2" y="2" width="20" height="9" rx="2" fill={c}/><path d="M25 4.5V8.5C25.8 8.2 26.5 7.2 26.5 6.5 26.5 5.8 25.8 4.8 25 4.5Z" fill={c} fillOpacity=".4"/></svg>
+      </div>
+    </div>
+  );
+}
+function Device({ children, dark, footer }) {
+  return (
+    <div className={"rt-device "+(dark?"dark":"light")}>
+      <div className="rt-island" />
+      <StatusBar dark={dark} />
+      <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column' }}>
+        <div style={{ flex:1, overflow:'auto', paddingTop:'var(--sb)' }}>{children}</div>
+        {footer && <div className="rt-footer" style={{ padding:'12px 20px 30px', background:dark?'transparent':'rgba(242,242,247,0.9)',
+          backdropFilter:'blur(10px)', borderTop:dark?'none':'1px solid rgba(0,0,0,0.05)' }}>{footer}</div>}
+      </div>
+      <div className="rt-home" style={{ background:dark?'rgba(255,255,255,.7)':'rgba(0,0,0,.28)' }} />
+    </div>
+  );
+}
+const Scroll = ({ children, style }) => <div style={{ padding:'8px 20px 20px', ...style }}>{children}</div>;
+const H = ({ title, sub, dark }) => (
+  <div style={{ padding:'6px 20px 14px' }}>
+    <Type v="title1" weight="bold" color={dark?'#fff':undefined} style={{letterSpacing:-0.5}}>{title}</Type>
+    {sub && <Type v="body2" color={dark?'rgba(255,255,255,.6)':'var(--muted)'} style={{marginTop:6}}>{sub}</Type>}
+  </div>
+);
+
+/* ─── furniture data + fit logic (ported verbatim from app-logic.dc.js) ─── */
+const FURN = [
+  { id:'sofa3', name:'3인 소파', cat:'소파', w:220, d:95, h:85, price:890000, fg:'#0066FF' },
+  { id:'sofa2', name:'2인 소파', cat:'소파', w:160, d:90, h:80, price:590000, fg:'#0066FF' },
+  { id:'bedQ', name:'퀸 침대', cat:'침대', w:163, d:203, h:100, price:1290000, fg:'#A44BE0' },
+  { id:'bedK', name:'킹 침대', cat:'침대', w:183, d:203, h:100, price:1590000, fg:'#A44BE0' },
+  { id:'bedSS', name:'슈퍼싱글 침대', cat:'침대', w:110, d:203, h:95, price:790000, fg:'#A44BE0' },
+  { id:'desk', name:'책상 1400', cat:'테이블', w:140, d:70, h:75, price:240000, fg:'#00A038' },
+  { id:'dining', name:'4인 식탁', cat:'테이블', w:140, d:80, h:75, price:420000, fg:'#00A038' },
+  { id:'shelf', name:'책장 800', cat:'수납', w:80, d:35, h:180, price:150000, fg:'#D97B00' },
+  { id:'ward', name:'옷장 1200', cat:'수납', w:120, d:60, h:200, price:680000, fg:'#D97B00' },
+];
+const DOOR = 80;
+const won = n => n.toLocaleString('ko-KR') + '원';
+
+/* ─── AR marker config (js-aruco2, ARUCO_MIP_36h12 dictionary) ─── */
+const DICT = 'ARUCO_MIP_36h12';
+const MARKER_MM = 100;            // printed marker side length (10cm)
+const TARGETS = [                 // marker id → room corner
+  { id: 0, label: 'A', pos: '좌측 앞' },
+  { id: 1, label: 'B', pos: '우측 앞' },
+  { id: 2, label: 'C', pos: '좌측 뒤' },
+  { id: 3, label: 'D', pos: '우측 뒤' },
+];
+const medianVec = (list) => {
+  if (!list.length) return null;
+  const at = i => { const s=list.map(v=>v[i]).sort((a,b)=>a-b); return s[s.length>>1]; };
+  return [at(0), at(1), at(2)];
+};
+const dist3 = (a,b) => Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+
+/* ─── camera calibration: focal length from a marker's homography (Zhang single-view) ─── */
+function solveLinear(M, b, n){
+  const A = M.map((r,i)=>r.concat(b[i]));
+  for(let col=0; col<n; col++){
+    let piv=col; for(let r=col+1;r<n;r++) if(Math.abs(A[r][col])>Math.abs(A[piv][col])) piv=r;
+    if(Math.abs(A[piv][col])<1e-12) return null;
+    [A[col],A[piv]]=[A[piv],A[col]];
+    for(let r=0;r<n;r++){ if(r===col) continue; const f=A[r][col]/A[col][col];
+      for(let k=col;k<=n;k++) A[r][k]-=f*A[col][k]; }
+  }
+  const x=new Array(n); for(let i=0;i<n;i++) x[i]=A[i][n]/A[i][i]; return x;
+}
+// homography mapping a unit square (0,0)(1,0)(1,1)(0,1) → the 4 image corners
+function homographyUnitSquareTo(pts){
+  const sq=[[0,0],[1,0],[1,1],[0,1]], M=[], b=[];
+  for(let i=0;i<4;i++){ const [X,Y]=sq[i], [u,v]=pts[i];
+    M.push([X,Y,1,0,0,0,-u*X,-u*Y]); b.push(u);
+    M.push([0,0,0,X,Y,1,-v*X,-v*Y]); b.push(v);
+  }
+  const h=solveLinear(M,b,8); if(!h) return null;
+  return [h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1];
+}
+// focal-length candidates (px) from one square marker, principal point (cx,cy), square pixels
+function focalsFromMarker(corners, cx, cy){
+  const H=homographyUnitSquareTo(corners.map(c=>[c.x,c.y])); if(!H) return [];
+  const h1=[H[0],H[3],H[6]], h2=[H[1],H[4],H[7]], c1=H[6], c2=H[7];
+  const P=(a,b)=> a[0]*b[0]+a[1]*b[1]-cx*(a[0]*b[2]+b[0]*a[2])-cy*(a[1]*b[2]+b[1]*a[2])+(cx*cx+cy*cy)*a[2]*b[2];
+  const out=[];
+  const P12=P(h1,h2); if(Math.abs(P12)>1e-9){ const w=-(c1*c2)/P12; if(w>0) out.push(1/Math.sqrt(w)); }
+  const dP=P(h1,h1)-P(h2,h2); if(Math.abs(dP)>1e-9){ const w=-(c1*c1-c2*c2)/dP; if(w>0) out.push(1/Math.sqrt(w)); }
+  return out;
+}
+
+/* ─── marker prep screen: generate + print real ArUco markers ─── */
+function MarkerScreen({ printed, onPrinted, onNext }) {
+  const markers = React.useMemo(() => {
+    if (typeof AR === 'undefined' || !AR.Dictionary) return TARGETS.map(t=>({...t, svg:null}));
+    const dict = new AR.Dictionary(DICT);
+    return TARGETS.map(t => ({ ...t, svg: dict.generateSVG(t.id) }));
+  }, []);
+
+  const printMarkers = () => {
+    const blocks = markers.map(m => `
+      <div style="page-break-after:always;text-align:center;padding-top:40px;font-family:sans-serif">
+        <div style="width:100mm;height:100mm;margin:0 auto">${m.svg||''}</div>
+        <div style="margin-top:8mm;font-size:20pt;font-weight:700">마커 ${m.label} · ${m.pos} (ID ${m.id})</div>
+        <div style="margin-top:2mm;font-size:11pt;color:#555">한 변 100mm · A4 배율 100%로 인쇄하세요</div>
+      </div>`).join('');
+    const w = window.open('', '_blank');
+    if (!w) { alert('팝업이 차단되었습니다. 팝업을 허용해 주세요.'); return; }
+    w.document.write(`<html><head><title>RoomTetris 마커</title></head><body>${blocks}</body></html>`);
+    w.document.close(); onPrinted();
+    setTimeout(()=>{ w.focus(); w.print(); }, 300);
+  };
+
+  return (
+    <Device footer={<div style={{display:'flex',flexDirection:'column',gap:10}}>
+        <Btn variant="outlined" onClick={printMarkers}>{printed?'마커 인쇄 열림 ✓':'마커 4장 인쇄'}</Btn>
+        <Btn onClick={onNext}>스캔 시작</Btn>
+      </div>}>
+      <H title="마커 준비" sub="마커 4장을 인쇄해 방 네 모서리 바닥에 붙여주세요." />
+      <Scroll>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+          {markers.map(m=>(
+            <div key={m.id} style={{ background:'#fff', borderRadius:16, padding:16, textAlign:'center' }}>
+              <div style={{ width:'100%', aspectRatio:'1', borderRadius:10, background:'#fff',
+                border:'1px solid var(--line)', padding:10, marginBottom:10 }}
+                dangerouslySetInnerHTML={{ __html: m.svg ||
+                  '<div style="width:100%;height:100%;background:repeating-conic-gradient(#111 0 25%,#fff 0 50%) 0 0/33% 33%"></div>' }} />
+              <Type v="body2" weight="bold">마커 {m.label} · {m.pos}</Type>
+              <Type v="caption" color="var(--muted)" style={{marginTop:2}}>ID {m.id}</Type>
+            </div>
+          ))}
+        </div>
+        <SectionMessage title="실제 크기로 인쇄하세요">A4 용지, 배율 100% (마커 한 변 10cm). 크기가 다르면 측정 오차가 커집니다. 마커는 ARUCO_MIP_36h12 사전을 사용합니다.</SectionMessage>
+      </Scroll>
+    </Device>
+  );
+}
+
+/* ─── live camera + marker measurement screen ─── */
+const CW = 360, CH = 640, NEED = 14;   // processing size, samples per marker
+function ScanScreen({ onMeasured, onBack }) {
+  const videoRef = useRef(null), canvasRef = useRef(null);
+  const rafRef = useRef(0), streamRef = useRef(null), doneRef = useRef(false);
+  const samples = useRef({0:[],1:[],2:[],3:[]}), wHist = useRef([]), dHist = useRef([]);
+  const fBuf = useRef([]), lastSizeRef = useRef(null);
+  const [err, setErr] = useState(null);
+  const [ui, setUi] = useState({ seen:[], progress:0, w:null, d:null, ready:false, fEff:null, fSource:'default' });
+
+  // calibration state (persisted per device)
+  const loadCal = () => { try {
+    const mf = Number(localStorage.getItem('rt_calManualF')); const sc = Number(localStorage.getItem('rt_calScale'));
+    return { manualF: mf>0 ? mf : null, scale: sc>0 ? sc : 1 };
+  } catch(e){ return { manualF:null, scale:1 }; } };
+  const [cal, setCal] = useState(loadCal);
+  const calRef = useRef({ manualF:cal.manualF, scale:cal.scale, fAuto:null });
+  useEffect(()=>{ calRef.current.manualF=cal.manualF; calRef.current.scale=cal.scale;
+    try { if(cal.manualF) localStorage.setItem('rt_calManualF', String(Math.round(cal.manualF))); else localStorage.removeItem('rt_calManualF');
+      localStorage.setItem('rt_calScale', String(cal.scale)); } catch(e){} }, [cal]);
+  const [showCal, setShowCal] = useState(false);
+  const [calDist, setCalDist] = useState('');
+  const doDistanceCal = () => { const D=parseFloat(calDist), px=lastSizeRef.current;
+    if(!D||!px) return; setCal(c=>({ ...c, manualF: px*(D*10)/MARKER_MM })); };
+  const resetCal = () => { setCal({ manualF:null, scale:1 }); fBuf.current=[]; };
+
+  useEffect(() => {
+    let stopped = false;
+    const hasAR = typeof AR !== 'undefined' && typeof POS !== 'undefined';
+    if (!hasAR) { setErr('lib'); return; }
+    const detector = new AR.Detector({ dictionaryName: DICT });
+    const canvas = canvasRef.current, ctx = canvas.getContext('2d');
+    canvas.width = CW; canvas.height = CH;
+    const cx = CW/2, cy = CH/2;
+    let seedF = calRef.current.manualF || CW;
+    let posit = new POS.Posit(MARKER_MM, seedF), lastF = seedF;
+
+    navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:false })
+      .then(stream => {
+        if (stopped) { stream.getTracks().forEach(t=>t.stop()); return; }
+        streamRef.current = stream;
+        const v = videoRef.current; v.srcObject = stream; v.play();
+        rafRef.current = requestAnimationFrame(loop);
+      })
+      .catch(() => setErr('perm'));
+
+    function coverDraw(v) {
+      const vw=v.videoWidth, vh=v.videoHeight; if(!vw||!vh) return false;
+      const scale=Math.max(CW/vw, CH/vh), sw=CW/scale, sh=CH/scale;
+      ctx.drawImage(v, (vw-sw)/2, (vh-sh)/2, sw, sh, 0,0, CW,CH);
+      return true;
+    }
+    function median(a){ const s=[...a].sort((x,y)=>x-y); return s[s.length>>1]; }
+    function loop() {
+      rafRef.current = requestAnimationFrame(loop);
+      const v = videoRef.current;
+      if (!v || v.readyState !== v.HAVE_ENOUGH_DATA) return;
+      if (!coverDraw(v)) return;
+      const img = ctx.getImageData(0,0,CW,CH);
+      const markers = detector.detect(img);
+      const seen = [], dets = [];
+      let biggest = 0;
+      for (const m of markers) {
+        const t = TARGETS.find(x=>x.id===m.id); if(!t) continue;
+        seen.push(m.id); dets.push(m);
+        ctx.lineWidth=3; ctx.strokeStyle='#3DFF7E'; ctx.beginPath();
+        m.corners.forEach((c,j)=>{ const n=m.corners[(j+1)%4]; ctx.moveTo(c.x,c.y); ctx.lineTo(n.x,n.y); });
+        ctx.stroke();
+        ctx.fillStyle='#3DFF7E'; ctx.font='bold 20px sans-serif';
+        ctx.fillText(t.label, m.corners[0].x, m.corners[0].y-6);
+        // mean projected side length (px) — for manual distance calibration
+        let side=0; for(let j=0;j<4;j++){ const a=m.corners[j], b=m.corners[(j+1)%4]; side+=Math.hypot(a.x-b.x,a.y-b.y); } side/=4;
+        if(side>biggest){ biggest=side; lastSizeRef.current=side; }
+        // auto focal-length estimate from marker homography
+        for (const f of focalsFromMarker(m.corners, cx, cy)) if (f>CW*0.3 && f<CW*6){ fBuf.current.push(f); if(fBuf.current.length>60) fBuf.current.shift(); }
+      }
+      // effective focal length: manual base (if calibrated) or auto estimate, × fine-tune scale
+      const fAuto = fBuf.current.length>=10 ? median(fBuf.current) : null;
+      calRef.current.fAuto = fAuto;
+      const baseF = calRef.current.manualF || fAuto || CW;
+      const effF = baseF * (calRef.current.scale||1);
+      if (Math.abs(effF-lastF)/lastF > 0.01) { posit = new POS.Posit(MARKER_MM, effF); lastF = effF; }
+      for (const m of dets) {
+        const cs = m.corners.map(c=>({ x:c.x-cx, y:cy-c.y }));
+        const pose = posit.pose(cs);
+        if (pose && pose.bestTranslation) {
+          const buf = samples.current[m.id];
+          buf.push(pose.bestTranslation); if (buf.length>NEED*2) buf.shift();
+        }
+      }
+      const med = id => medianVec(samples.current[id]);
+      const have = TARGETS.every(t=>samples.current[t.id].length>0);
+      if (have) {
+        const A=med(0),B=med(1),C=med(2),D=med(3);
+        const w=(dist3(A,B)+dist3(C,D))/2/10, d=(dist3(A,C)+dist3(B,D))/2/10;
+        if (isFinite(w)&&isFinite(d)) { wHist.current.push(w); dHist.current.push(d);
+          if(wHist.current.length>20){wHist.current.shift();dHist.current.shift();} }
+      }
+      const filled = TARGETS.reduce((a,t)=>a+Math.min(samples.current[t.id].length,NEED),0);
+      const progress = Math.round(filled/(NEED*4)*100);
+      const wMed = wHist.current.length ? median(wHist.current) : null;
+      const dMed = dHist.current.length ? median(dHist.current) : null;
+      const hasF = calRef.current.manualF!=null || fAuto!=null;
+      const ready = progress>=100 && wMed!=null && hasF;
+      if (ready && !doneRef.current) doneRef.current = true;
+      setUi({ seen, progress, w:wMed, d:dMed, ready, fEff:Math.round(effF),
+        fSource: calRef.current.manualF!=null ? 'manual' : (fAuto!=null?'auto':'default') });
+    }
+
+    return () => {
+      stopped = true; cancelAnimationFrame(rafRef.current);
+      if (streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
+    };
+  }, []);
+
+  const finish = () => {
+    const w = Math.max(100, Math.min(1000, Math.round(ui.w)));
+    const d = Math.max(100, Math.min(1000, Math.round(ui.d)));
+    const arr = wHist.current, m = arr.length ? [...arr].sort((a,b)=>a-b)[arr.length>>1] : w;
+    const mad = arr.length ? [...arr].map(x=>Math.abs(x-m)).sort((a,b)=>a-b)[arr.length>>1] : 1.2;
+    onMeasured(w, d, Math.max(0.5, Math.min(5, mad || 1.2)));
+  };
+
+  const seenSet = new Set(ui.seen);
+
+  return (
+    <Device dark footer={
+      err ? <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          <Btn onClick={()=>onMeasured(null,null,null)}>기본 치수로 계속 (360×300)</Btn>
+          <Btn variant="ghost" onClick={onBack}>마커 준비로 돌아가기</Btn>
+        </div>
+      : <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          <Btn disabled={!ui.ready} onClick={finish}>
+            {ui.ready ? `측정 결과 보기 · ${(ui.w/100).toFixed(2)}m × ${(ui.d/100).toFixed(2)}m` : '마커 4개를 모두 비춰주세요'}
+          </Btn>
+          <Btn variant="ghost" onClick={()=>onMeasured(null,null,null)}>카메라 없이 기본 치수로 진행</Btn>
+        </div>}>
+      <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)', background:'#0a0d12' }}>
+        <video ref={videoRef} playsInline muted style={{ display:'none' }} />
+        <canvas ref={canvasRef} style={{ position:'absolute', inset:'var(--sb) 0 0', width:'100%', height:'calc(100% - var(--sb))',
+          objectFit:'cover', background:'#0a0d12' }} />
+
+        {err && (
+          <div style={{ position:'absolute', inset:'var(--sb) 20px 0', display:'flex', flexDirection:'column',
+            alignItems:'center', justifyContent:'center', textAlign:'center', gap:10 }}>
+            <div style={{ fontSize:40 }}>📷</div>
+            <Type v="title3" weight="bold" color="#fff">{err==='lib'?'마커 라이브러리 로드 실패':'카메라를 사용할 수 없어요'}</Type>
+            <Type v="body2" color="rgba(255,255,255,0.7)">
+              {err==='lib' ? '인터넷 연결을 확인하거나 기본 치수로 진행하세요.'
+                : '브라우저에서 카메라 권한을 허용해야 실측이 가능합니다. HTTPS 또는 localhost에서 열어주세요.'}
+            </Type>
+          </div>
+        )}
+
+        {!err && (
+          <Fragment>
+            {/* calibration button */}
+            <button onClick={()=>setShowCal(s=>!s)} style={{ position:'absolute', top:'calc(var(--sb) + 12px)', right:14, zIndex:8,
+              border:'none', cursor:'pointer', background:'rgba(255,255,255,0.16)', backdropFilter:'blur(10px)',
+              color:'#fff', borderRadius:99, padding:'6px 12px', fontSize:12, fontWeight:700, fontFamily:'inherit' }}>
+              ⚙ 보정{ui.fEff?` f≈${ui.fEff}`:''}
+            </button>
+            {showCal && (
+              <div style={{ position:'absolute', left:16, right:16, bottom:16, zIndex:9,
+                background:'rgba(18,22,29,0.96)', backdropFilter:'blur(14px)', borderRadius:18, padding:16,
+                border:'1px solid rgba(255,255,255,0.12)' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+                  <Type v="body" weight="bold" color="#fff">카메라 보정</Type>
+                  <button onClick={()=>setShowCal(false)} style={{ border:'none', background:'none', color:'rgba(255,255,255,0.6)', fontSize:20, cursor:'pointer', lineHeight:1 }}>×</button>
+                </div>
+                <Type v="caption" color="rgba(255,255,255,0.6)">초점거리 f ≈ {ui.fEff||'—'}px · {ui.fSource==='manual'?'수동 보정':ui.fSource==='auto'?'자동 추정':'기본값'}</Type>
+                <div style={{ marginTop:14 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5 }}>
+                    <Type v="caption" color="rgba(255,255,255,0.7)">미세보정 (측정값 스케일)</Type>
+                    <Type v="caption" color="#fff">{Math.round((cal.scale||1)*100)}%</Type>
+                  </div>
+                  <input type="range" min="0.85" max="1.15" step="0.01" value={cal.scale||1}
+                    onChange={e=>setCal(c=>({...c, scale:Number(e.target.value)}))} style={{width:'100%'}} />
+                </div>
+                <div style={{ marginTop:14, display:'flex', gap:8, alignItems:'center' }}>
+                  <input type="number" inputMode="decimal" placeholder="마커까지 거리 (cm)" value={calDist}
+                    onChange={e=>setCalDist(e.target.value)}
+                    style={{ flex:1, minWidth:0, background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.15)',
+                      borderRadius:10, padding:'9px 12px', color:'#fff', fontFamily:'inherit', fontSize:14 }} />
+                  <Btn size="small" full={false} onClick={doDistanceCal} style={{padding:'9px 14px', whiteSpace:'nowrap'}}>기준거리 보정</Btn>
+                </div>
+                <div style={{ display:'flex', gap:8, marginTop:10 }}>
+                  <Btn size="small" variant="ghost" full={false} onClick={resetCal} style={{padding:'8px 12px'}}>초기화</Btn>
+                </div>
+                <Type v="caption" color="rgba(255,255,255,0.5)" style={{marginTop:12, lineHeight:1.5}}>
+                  마커 1장을 정면에서 비추고 실제 거리(cm)를 입력해 “기준거리 보정”을 누르면 초점거리를 정확히 맞춰요. 자동 추정은 스캔 중 계속 갱신되고, 기기별로 저장됩니다.
+                </Type>
+              </div>
+            )}
+            <div style={{ position:'absolute', inset:'calc(var(--sb) + 20px) 24px 150px', border:'2px dashed rgba(255,255,255,0.25)',
+              borderRadius:12, pointerEvents:'none' }} />
+            <div style={{ position:'absolute', top:'calc(var(--sb) + 12px)', left:0, right:0, display:'flex', justifyContent:'center', gap:8 }}>
+              {TARGETS.map(t=>{ const on=seenSet.has(t.id); return (
+                <div key={t.id} style={{ display:'flex', alignItems:'center', gap:5, padding:'6px 11px', borderRadius:99,
+                  background:on?'#3DFF7E':'rgba(255,255,255,0.12)', color:on?'#0a0d12':'#fff',
+                  fontWeight:700, fontSize:13 }}>
+                  <span style={{width:7,height:7,borderRadius:'50%',background:on?'#0a0d12':'rgba(255,255,255,0.5)'}} />{t.label}</div>
+              ); })}
+            </div>
+            {ui.w!=null && (
+              <div style={{ position:'absolute', top:'calc(var(--sb) + 58px)', left:0, right:0, textAlign:'center' }}>
+                <div style={{ display:'inline-block', background:'rgba(0,0,0,0.45)', backdropFilter:'blur(8px)',
+                  borderRadius:12, padding:'8px 16px' }}>
+                  <Type v="title3" weight="bold" color="#fff">{(ui.w/100).toFixed(2)}m × {(ui.d/100).toFixed(2)}m</Type>
+                </div>
+              </div>
+            )}
+            <div style={{ position:'absolute', left:0, right:0, bottom:20, padding:'0 24px', textAlign:'center' }}>
+              <div style={{ display:'inline-flex', alignItems:'center', gap:8, background:'rgba(255,255,255,0.12)',
+                backdropFilter:'blur(10px)', borderRadius:99, padding:'8px 16px', marginBottom:14 }}>
+                <span style={{ width:8, height:8, borderRadius:'50%', background: ui.ready?'#3DFF7E':'#FFC53D' }} />
+                <Type v="body2" weight="bold" color="#fff">
+                  {ui.ready ? '측정 완료 — 안정화됨' : ui.seen.length<4 ? '마커 4개를 한 화면에 담아주세요' : '방을 천천히 비춰 정밀도를 높여주세요'}
+                </Type>
+              </div>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+                <Type v="body2" color="rgba(255,255,255,0.7)">마커 {ui.seen.length}/4 인식</Type>
+                <Type v="body2" weight="bold" color="#fff">{ui.progress}%</Type>
+              </div>
+              <div style={{ height:6, borderRadius:99, background:'rgba(255,255,255,0.15)', overflow:'hidden' }}>
+                <div style={{ height:'100%', width:ui.progress+'%', background:'#3DFF7E', borderRadius:99, transition:'width .12s' }} />
+              </div>
+            </div>
+          </Fragment>
+        )}
+      </div>
+    </Device>
+  );
+}
+
+function App() {
+  const [st, set] = useState({ screen:'intro', cat:'전체', selId:null,
+    posX:40, posY:40, rot:false, printed:false, placements:[], shared:false,
+    measuredW:null, measuredD:null, accuracy:null });
+  const S = (patch) => set(prev => ({ ...prev, ...(typeof patch==='function'?patch(prev):patch) }));
+  const go = (s) => S({ screen: s });
+
+  const { screen, cat, selId, posX, posY, rot, printed, placements, shared } = st;
+  const roomW = st.measuredW ?? 360, roomD = st.measuredD ?? 300, showDims = true;
+
+  const fitOrient = (w,d) => w<=roomW && d<=roomD && (roomW-w>=DOOR || roomD-d>=DOOR);
+  const fitsAny = f => fitOrient(f.w,f.d) || fitOrient(f.d,f.w);
+
+  const sel = FURN.find(f=>f.id===selId) || FURN[0];
+  const effW = rot ? sel.d : sel.w;
+  const effD = rot ? sel.w : sel.d;
+  const posMax = Math.max(0, roomW-effW);
+  const posYMax = Math.max(0, roomD-effD);
+  const clampedPos = Math.min(posX, posMax);
+  const posYc = Math.min(posY, posYMax);
+  const rect = { x1:clampedPos, x2:clampedPos+effW, y1:posYc, y2:posYc+effD };
+  const doorRect = { x1:roomW-DOOR, x2:roomW, y1:roomD-DOOR, y2:roomD };
+  const hit = (a,b)=> a.x1<b.x2 && b.x1<a.x2 && a.y1<b.y2 && b.y1<a.y2;
+  const rectOf = p => ({ x1:p.posX, x2:p.posX+p.effW, y1:p.posY??0, y2:(p.posY??0)+p.effD });
+  const doorHit = hit(rect, doorRect);
+  const collide = placements.find(p=>hit(rect, rectOf(p)));
+  const fits = !doorHit && !collide;
+  const inDoorBand = rect.y2 > doorRect.y1;
+  const gap = (inDoorBand ? doorRect.x1 : roomW) - rect.x2;
+
+  const VIEW_W = 354, sc = VIEW_W/roomW;
+  const bottomFor = y => 6 + (1 - y/roomD)*30;
+  const fpLeft = 12 + clampedPos*sc;
+  const fpW = Math.max(40, effW*sc);
+  const fpH = Math.max(20, effD*sc*0.42);
+  const bodyH = Math.max(24, sel.h*sc*0.7);
+
+  const planW = 280, planH = Math.round(planW*roomD/roomW);
+
+  const cats=['전체','소파','침대','테이블','수납'];
+  const items=FURN.filter(f=>cat==='전체'||f.cat===cat).map(f=>({...f, ok:fitsAny(f)}));
+
+  let verdictTitle, verdictBody, verdictVariant;
+  if (fits){ verdictVariant='pos'; verdictTitle='이 위치에 들어가요'; verdictBody='문·기존 가구와 겹치지 않아요. 옆 여유 '+Math.max(0,Math.round(gap))+'cm.'; }
+  else if (collide){ verdictVariant='neg'; verdictTitle='기존 가구와 겹쳐요'; verdictBody=collide.name+' 자리와 겹칩니다. 좌우·앞뒤로 옮기거나 회전해 보세요.'; }
+  else { verdictVariant='neg'; verdictTitle='문 개폐 공간과 겹쳐요'; verdictBody=Math.abs(Math.round(gap))+'cm만큼 왼쪽이나 안쪽으로 옮겨보세요.'; }
+
+  const roomWText=(roomW/100).toFixed(1)+'m', roomDText=(roomD/100).toFixed(1)+'m';
+
+  /* ─────────── screens ─────────── */
+
+  if (screen==='intro') return (
+    <Device footer={<Btn onClick={()=>go('marker')}>시작하기</Btn>}>
+      <Scroll>
+        <div style={{ padding:'24px 0 8px' }}>
+          <div style={{ width:64, height:64, borderRadius:18, background:'var(--accent)', display:'flex',
+            alignItems:'center', justifyContent:'center', marginBottom:20 }}>
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v6H3M15 21v-6h6"/></svg>
+          </div>
+          <Type v="title1" weight="bold" style={{fontSize:32,lineHeight:'40px',letterSpacing:-0.6}}>가구, 사기 전에<br/>방에 넣어보세요</Type>
+          <Type v="body" color="var(--muted)" style={{marginTop:14,lineHeight:'23px'}}>마커 기반 3D 스캔으로 방을 측정하고, 가구가 들어가는지 미리 확인합니다.</Type>
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:26 }}>
+          {[{n:1,title:'마커 인쇄 · 배치',desc:'마커 4장을 방 모서리에 붙여요'},
+            {n:2,title:'방 스캔',desc:'카메라로 마커를 비추면 치수를 계산해요'},
+            {n:3,title:'가구 배치 확인',desc:'AR로 넣어보고 들어가는지 판정해요'}].map(s=>(
+            <div key={s.n} style={{ display:'flex', gap:14, alignItems:'center', background:'#fff', borderRadius:16, padding:'16px 16px' }}>
+              <div style={{ width:32, height:32, borderRadius:'50%', background:'rgba(0,102,255,0.1)', color:'var(--accent)',
+                fontWeight:800, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{s.n}</div>
+              <div>
+                <Type v="body" weight="bold">{s.title}</Type>
+                <Type v="body2" color="var(--muted)" style={{marginTop:2}}>{s.desc}</Type>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Scroll>
+    </Device>
+  );
+
+  if (screen==='marker') return (
+    <MarkerScreen printed={printed} onPrinted={()=>S({printed:true})} onNext={()=>go('scan')} />
+  );
+
+  if (screen==='scan') return (
+    <ScanScreen onBack={()=>go('marker')}
+      onMeasured={(w,d,acc)=>S({ measuredW:w, measuredD:d, accuracy:acc,
+        posX:Math.round((w??360)/2), posY:Math.round((d??300)/2), screen:'result' })} />
+  );
+
+  if (screen==='result') {
+    const stats=[{k:'면적',v:(roomW*roomD/10000).toFixed(1)+'㎡'},{k:'둘레',v:((roomW+roomD)*2/100).toFixed(1)+'m'},{k:'천장고',v:'2.3m'}];
+    const planMarkers=[{id:'A',left:'0%',top:'100%'},{id:'B',left:'100%',top:'100%'},{id:'C',left:'0%',top:'0%'},{id:'D',left:'100%',top:'0%'}];
+    return (
+      <Device footer={<Btn onClick={()=>go('catalog')}>가구 고르기</Btn>}>
+        <div style={{ padding:'6px 20px 0', display:'flex', gap:6 }}>
+          <Badge color="var(--pos)" bg="rgba(0,191,64,0.1)">정확도 ±{(st.accuracy ?? 1.2).toFixed(1)}cm</Badge>
+          {st.measuredW==null && <Badge color="var(--muted)" bg="rgba(0,0,0,0.05)">기본값</Badge>}
+        </div>
+        <H title="측정 완료" sub="마커 4개 기준으로 방 치수를 계산했습니다." />
+        <Scroll>
+          <div style={{ background:'#fff', borderRadius:20, padding:'26px 20px', display:'flex', justifyContent:'center' }}>
+            <div style={{ position:'relative' }}>
+              <div style={{ position:'relative', width:planW, height:planH, background:'rgba(0,102,255,0.05)',
+                border:'2px solid var(--accent)', borderRadius:6 }}>
+                <div style={{ position:'absolute', top:-2, left:'30%', width:'40%', height:5, background:'#38bdf8', borderRadius:2 }} />
+                <div style={{ position:'absolute', top:-20, left:'30%', width:'40%', textAlign:'center' }}>
+                  <Type v="caption" color="#38bdf8" weight="bold">창문</Type></div>
+                <div style={{ position:'absolute', right:0, bottom:0, width:DOOR/roomW*100+'%', height:DOOR/roomD*100+'%',
+                  background:'repeating-linear-gradient(45deg,rgba(255,146,0,0.15) 0 6px,transparent 6px 12px)',
+                  borderLeft:'1.5px dashed #f59e0b', borderTop:'1.5px dashed #f59e0b' }} />
+                {planMarkers.map(m=>(
+                  <div key={m.id} style={{ position:'absolute', left:m.left, top:m.top, transform:'translate(-50%,-50%)',
+                    width:22, height:22, borderRadius:6, background:'var(--accent)', color:'#fff', fontSize:11, fontWeight:800,
+                    display:'flex', alignItems:'center', justifyContent:'center' }}>{m.id}</div>
+                ))}
+              </div>
+              <div style={{ position:'absolute', bottom:-26, left:0, right:0, textAlign:'center' }}>
+                <Type v="body2" weight="bold" color="var(--accent)">{roomWText}</Type></div>
+              <div style={{ position:'absolute', right:-46, top:0, bottom:0, display:'flex', alignItems:'center' }}>
+                <Type v="body2" weight="bold" color="var(--accent)">{roomDText}</Type></div>
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:10, marginTop:34 }}>
+            {stats.map(s=>(
+              <div key={s.k} style={{ flex:1, background:'#fff', borderRadius:14, padding:'14px 8px', textAlign:'center' }}>
+                <Type v="caption" color="var(--muted)">{s.k}</Type>
+                <Type v="title3" weight="bold" style={{marginTop:4}}>{s.v}</Type>
+              </div>
+            ))}
+          </div>
+        </Scroll>
+      </Device>
+    );
+  }
+
+  if (screen==='catalog') return (
+    <Device>
+      <H title="가구 선택" sub="측정한 방 기준으로 배치 가능 여부를 미리 표시합니다." />
+      {placements.length>0 && (
+        <div style={{ padding:'0 20px 6px' }}>
+          <button onClick={()=>go('saved')} style={{ border:'none', background:'none', cursor:'pointer',
+            color:'var(--accent)', fontWeight:700, fontSize:14, fontFamily:'inherit', padding:0 }}>
+            저장된 배치 {placements.length}개 보기 →</button>
+        </div>
+      )}
+      <div style={{ display:'flex', gap:8, overflowX:'auto', padding:'8px 20px 14px' }}>
+        {cats.map(c=><Chip key={c} label={c} active={cat===c} onClick={()=>S({cat:c})} />)}
+      </div>
+      <Scroll style={{paddingTop:0}}>
+        <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          {items.map(f=>(
+            <button key={f.id} onClick={()=>S({selId:f.id, posX:Math.round((roomW-f.w)/2),
+                posY:Math.max(0,Math.round((roomD-f.d)/2)-40), rot:false, screen:'place'})}
+              style={{ border:'none', textAlign:'left', cursor:'pointer', fontFamily:'inherit',
+                display:'flex', gap:14, alignItems:'center', background:'#fff', borderRadius:16, padding:14 }}>
+              <div style={{ width:64, height:64, borderRadius:12, flexShrink:0, background:f.fg+'1A',
+                display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <div style={{ width:34, height:26, borderRadius:5, background:f.fg }} />
+              </div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <Badge size="xsmall" color={f.fg} bg={f.fg+'1A'}>{f.cat}</Badge>
+                <Type v="body" weight="bold" style={{marginTop:5}}>{f.name}</Type>
+                <Type v="caption" color="var(--muted)" style={{marginTop:2}}>W{f.w} × D{f.d} × H{f.h}cm</Type>
+                <Type v="body2" weight="bold" style={{marginTop:4}}>{won(f.price)}</Type>
+              </div>
+              <Badge color={f.ok?'var(--pos)':'var(--neg)'} bg={f.ok?'rgba(0,191,64,0.1)':'rgba(255,66,66,0.1)'}>
+                {f.ok?'배치 가능':'공간 부족'}</Badge>
+            </button>
+          ))}
+        </div>
+      </Scroll>
+    </Device>
+  );
+
+  if (screen==='place') {
+    const faceFront=sel.fg;
+    return (
+      <Device dark footer={
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+              <Type v="body2" weight="bold" color="#fff">좌우</Type>
+              <Btn size="small" full={false} variant={rot?'solid':'ghost'} onClick={()=>S(p=>({rot:!p.rot}))}
+                style={{padding:'6px 12px'}}>회전 90°</Btn>
+            </div>
+            <input type="range" min="0" max={posMax} value={clampedPos}
+              onChange={e=>S({posX:Number(e.target.value)})} style={{width:'100%'}} />
+          </div>
+          <div>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+              <Type v="body2" weight="bold" color="#fff">앞뒤</Type>
+              <Type v="body2" color="rgba(255,255,255,0.6)">벽에서 {Math.round(posYc)}cm</Type>
+            </div>
+            <input type="range" min="0" max={posYMax} value={posYc}
+              onChange={e=>S({posY:Number(e.target.value)})} style={{width:'100%'}} />
+          </div>
+          <Btn disabled={!fits} onClick={()=>S(p=>({
+              placements:[...p.placements,{key:Date.now(),name:sel.name,fg:sel.fg,price:sel.price,
+                posX:clampedPos,posY:posYc,h:sel.h,effW,effD,gap:Math.round(gap)}],
+              screen:'saved', shared:false }))}>이 배치 저장</Btn>
+        </div>}>
+        <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)',
+          background:'radial-gradient(120% 90% at 50% 20%, #263140 0%, #0c1017 100%)' }}>
+          <div style={{ position:'absolute', top:'calc(var(--sb) + 12px)', left:0, right:0, display:'flex', justifyContent:'center', zIndex:5 }}>
+            <div style={{ background:'rgba(255,255,255,0.14)', backdropFilter:'blur(10px)', borderRadius:99,
+              padding:'8px 16px', display:'flex', gap:8, alignItems:'center' }}>
+              <span style={{width:8,height:8,borderRadius:'50%',background:sel.fg}} />
+              <Type v="body2" weight="bold" color="#fff">{sel.name} · {effW}cm × {effD}cm</Type>
+            </div>
+          </div>
+          <div style={{ position:'absolute', left:12, right:12, bottom:6, height:'46%',
+            transform:'perspective(600px) rotateX(52deg)', transformOrigin:'bottom',
+            background:'linear-gradient(rgba(255,255,255,0.09) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.09) 1px,transparent 1px)',
+            backgroundSize:'40px 40px', borderRadius:4 }} />
+          <div style={{ position:'absolute', left:12+(roomW-DOOR)*sc, width:DOOR*sc, bottom:bottomFor(roomD)+'%', height:34,
+            background:'repeating-linear-gradient(45deg,rgba(255,146,0,0.28) 0 8px,transparent 8px 16px)',
+            border:'1px dashed #f59e0b', borderRadius:4 }}>
+            <div style={{ position:'absolute', top:-18, left:0, right:0, textAlign:'center' }}>
+              <Type v="caption" weight="bold" color="#f59e0b">문 개폐 공간</Type></div>
+          </div>
+          {placements.map(p=>(
+            <div key={p.key} style={{ position:'absolute', left:Math.round(12+p.posX*sc),
+              width:Math.max(30,Math.round(p.effW*sc)), bottom:bottomFor((p.posY??0)+p.effD)+'%',
+              height:Math.max(20,Math.round((p.h??80)*sc*0.7)), background:p.fg+'55',
+              border:'1px solid '+p.fg+'99', borderRadius:3 }} />
+          ))}
+          {fits && gap>12 && (
+            <div style={{ position:'absolute', left:Math.round(fpLeft+fpW), width:Math.max(0,Math.round(gap*sc)),
+              bottom:(bottomFor(rect.y2)-0.6)+'%', height:0, borderTop:'2px dashed #00BF40',
+              display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <span style={{ position:'absolute', top:-18, whiteSpace:'nowrap', fontSize:11, fontWeight:700,
+                color:'#00BF40', background:'rgba(0,0,0,0.4)', padding:'1px 6px', borderRadius:5 }}>{Math.round(gap)}cm 여유</span>
+            </div>
+          )}
+          <div style={{ position:'absolute', left:Math.round(fpLeft), width:Math.round(fpW),
+            bottom:bottomFor(rect.y2)+'%', height:Math.round(bodyH) }}>
+            <div style={{ position:'absolute', inset:0, background:faceFront, borderRadius:'3px 3px 0 0',
+              boxShadow:'inset 0 -6px 12px rgba(0,0,0,0.25)', opacity:fits?0.92:0.5,
+              outline:'2px solid '+(fits?'#00BF40':'#FF4242'), outlineOffset:1 }} />
+            <div style={{ position:'absolute', left:0, right:0, top:0, height:Math.round(fpH),
+              transform:'translateY(-100%) perspective(300px) rotateX(60deg)', transformOrigin:'bottom',
+              background:`color-mix(in srgb, ${sel.fg} 60%, white)`, opacity:fits?0.92:0.5 }} />
+          </div>
+          <div style={{ position:'absolute', top:'calc(var(--sb) + 56px)', left:20, right:20, zIndex:6,
+            background:fits?'rgba(0,191,64,0.14)':'rgba(255,66,66,0.14)', backdropFilter:'blur(12px)',
+            border:'1px solid '+(fits?'rgba(0,191,64,0.5)':'rgba(255,66,66,0.5)'), borderRadius:16, padding:'13px 15px',
+            display:'flex', gap:12, alignItems:'center' }}>
+            <div style={{ width:30, height:30, borderRadius:'50%', flexShrink:0, background:fits?'#00BF40':'#FF4242',
+              color:'#fff', fontWeight:800, fontSize:17, display:'flex', alignItems:'center', justifyContent:'center' }}>
+              {fits?'✓':'!'}</div>
+            <div>
+              <Type v="body" weight="bold" color="#fff">{verdictTitle}</Type>
+              <Type v="body2" color="rgba(255,255,255,0.8)" style={{marginTop:2}}>{verdictBody}</Type>
+            </div>
+          </div>
+        </div>
+      </Device>
+    );
+  }
+
+  if (screen==='saved') {
+    const total=placements.reduce((a,p)=>a+p.price,0);
+    return (
+      <Device footer={placements.length>0 && <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          <Btn variant="outlined" onClick={()=>S({shared:true})}>{shared?'링크 복사됨 ✓':'배치 리포트 공유'}</Btn>
+          <Btn onClick={()=>go('catalog')}>가구 더 추가</Btn>
+        </div>}>
+        <div style={{ padding:'6px 20px 0', display:'flex', alignItems:'center', gap:8 }}>
+          <button onClick={()=>go('catalog')} style={{ border:'none', background:'none', cursor:'pointer', padding:0, color:'var(--accent)', fontWeight:700, fontSize:14 }}>← 가구</button>
+        </div>
+        <H title={`저장된 배치 ${placements.length}개`} sub="배치 확인이 끝난 가구 목록입니다." />
+        <Scroll>
+          {placements.length===0 ? (
+            <div style={{ textAlign:'center', padding:'60px 20px', color:'var(--muted)' }}>
+              <Type v="body" color="var(--muted)">저장된 배치가 없습니다</Type>
+              <Btn full={false} onClick={()=>go('catalog')} style={{marginTop:16,padding:'10px 20px'}}>가구 고르기</Btn>
+            </div>
+          ) : (
+            <Fragment>
+              <div style={{ background:'#fff', borderRadius:18, padding:20, display:'flex', justifyContent:'center', marginBottom:16 }}>
+                <div style={{ position:'relative', width:planW, height:planH, background:'rgba(0,0,0,0.03)',
+                  border:'2px solid var(--accent)', borderRadius:6 }}>
+                  <div style={{ position:'absolute', right:0, bottom:0, width:DOOR/roomW*100+'%', height:DOOR/roomD*100+'%',
+                    background:'repeating-linear-gradient(45deg,rgba(255,146,0,0.15) 0 6px,transparent 6px 12px)' }} />
+                  {placements.map(p=>(
+                    <div key={p.key} style={{ position:'absolute', left:(p.posX/roomW*100)+'%', top:((p.posY??0)/roomD*100)+'%',
+                      width:(p.effW/roomW*100)+'%', height:(p.effD/roomD*100)+'%', background:`color-mix(in srgb, ${p.fg} 14%, white)`,
+                      border:'1.5px solid '+p.fg, borderRadius:3, display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
+                      <span style={{fontSize:9,fontWeight:700,color:p.fg,padding:2,textAlign:'center'}}>{p.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                {placements.map(p=>(
+                  <div key={p.key} style={{ display:'flex', gap:12, alignItems:'center', background:'#fff', borderRadius:14, padding:14 }}>
+                    <div style={{ width:14, height:36, borderRadius:4, background:p.fg, flexShrink:0 }} />
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <Type v="body" weight="bold">{p.name}</Type>
+                      <Type v="caption" color="var(--muted)" style={{marginTop:2}}>W{p.effW} × D{p.effD}cm · 여유 {p.gap}cm</Type>
+                    </div>
+                    <Type v="body2" weight="bold">{won(p.price)}</Type>
+                    <button onClick={()=>S(prev=>({placements:prev.placements.filter(x=>x.key!==p.key)}))}
+                      style={{ border:'none', background:'none', cursor:'pointer', color:'var(--muted)', fontSize:18, padding:'0 2px' }}>×</button>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:16,
+                padding:'14px 16px', background:'rgba(0,102,255,0.06)', borderRadius:14 }}>
+                <Type v="body" weight="bold">예상 합계</Type>
+                <Type v="title3" weight="bold" color="var(--accent)">{won(total)}</Type>
+              </div>
+            </Fragment>
+          )}
+        </Scroll>
+      </Device>
+    );
+  }
+  return null;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
