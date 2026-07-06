@@ -207,11 +207,14 @@ function MarkerScreen({ printed, onPrinted, onNext }) {
   }, []);
 
   const printMarkers = () => {
+    // js-aruco2 SVG는 10x10 단위 뷰박스에 8x8 검은 마커(둘레 1모듈 흰 여백)를 그림.
+    // 검은 마커(실제 인식 대상, MARKER_MM=100)를 100mm로 만들려면 컨테이너를 100*10/8 = 125mm로.
+    const boxMM = Math.round(MARKER_MM * 10 / 8);
     const blocks = markers.map(m => `
       <div style="page-break-after:always;text-align:center;padding-top:40px;font-family:sans-serif">
-        <div style="width:100mm;height:100mm;margin:0 auto">${m.svg||''}</div>
+        <div style="width:${boxMM}mm;height:${boxMM}mm;margin:0 auto">${m.svg||''}</div>
         <div style="margin-top:8mm;font-size:20pt;font-weight:700">마커 ${m.label} · ${m.pos} (ID ${m.id})</div>
-        <div style="margin-top:2mm;font-size:11pt;color:#555">한 변 100mm · A4 배율 100%로 인쇄하세요</div>
+        <div style="margin-top:2mm;font-size:11pt;color:#555">검은 마커 한 변 ${MARKER_MM}mm (흰 여백 포함 ${boxMM}mm) · A4 배율 100%로 인쇄하세요</div>
       </div>`).join('');
     const w = window.open('', '_blank');
     if (!w) { alert('팝업이 차단되었습니다. 팝업을 허용해 주세요.'); return; }
