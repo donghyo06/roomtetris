@@ -13,6 +13,8 @@
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/svd.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/posit1.js"></script>
+<!-- three.js: procedural 3D furniture models -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   :root { --accent:#0066FF; --pos:#00BF40; --neg:#FF4242; --ink:#111; --muted:#6b7280; --line:rgba(0,0,0,0.08); --sb:54px; }
@@ -478,12 +480,139 @@ function ScanScreen({ onMeasured, onBack }) {
   );
 }
 
+/* ─── procedural 3D furniture (three.js), sized by w·d·h (cm) ─── */
+const KIND = { sofa3:'sofa', sofa2:'sofa', bedQ:'bed', bedK:'bed', bedSS:'bed',
+  desk:'table', dining:'table', shelf:'shelf', ward:'wardrobe' };
+
+function _shade(color, amt){ const c=color.clone(); const hsl={}; c.getHSL(hsl);
+  hsl.l=Math.max(0,Math.min(1,hsl.l+amt)); c.setHSL(hsl.h,hsl.s,hsl.l); return c; }
+function buildFurniture(kind, w, d, h, hex){
+  const g = new THREE.Group();
+  const main = new THREE.Color(hex);
+  const wood = new THREE.Color('#c8a06a');
+  const cloth = new THREE.Color('#eef0f2');
+  const M = c => new THREE.MeshStandardMaterial({ color:c, roughness:0.82, metalness:0.03 });
+  const box = (bw,bh,bd, c, x=0,y=0,z=0) => {
+    const m=new THREE.Mesh(new THREE.BoxGeometry(Math.max(0.5,bw),Math.max(0.5,bh),Math.max(0.5,bd)), M(c));
+    m.position.set(x,y,z); g.add(m); return m; };
+  if (kind==='sofa'){
+    const armW=w*0.12, baseH=h*0.42;
+    box(w, baseH, d, main, 0, baseH/2, 0);
+    box(w, h*0.58, d*0.16, main, 0, baseH+h*0.29, -d/2+d*0.08);            // back
+    box(armW, h*0.6, d, main, -(w/2-armW/2), h*0.3, 0);
+    box(armW, h*0.6, d, main,  (w/2-armW/2), h*0.3, 0);
+    const seatW=(w-2*armW); const n = w>190?3:2, cw=seatW/n*0.94;
+    for(let i=0;i<n;i++){ const cx=-seatW/2 + seatW/n*(i+0.5);
+      box(cw, baseH*0.5, d*0.78, _shade(main,0.06), cx, baseH+baseH*0.22, d*0.06); }
+  } else if (kind==='bed'){
+    const frameH=h*0.32;
+    box(w, frameH, d, _shade(main,-0.08), 0, frameH/2, 0);
+    box(w*0.95, h*0.2, d*0.95, cloth, 0, frameH+h*0.1, 0);                  // mattress
+    box(w, h*0.55, d*0.05, main, 0, h*0.275, -d/2+d*0.025);                 // headboard
+    box(w*0.34, h*0.08, d*0.18, _shade(cloth,0.02), -w*0.2, frameH+h*0.24, -d/2+d*0.2);
+    box(w*0.34, h*0.08, d*0.18, _shade(cloth,0.02),  w*0.2, frameH+h*0.24, -d/2+d*0.2);
+  } else if (kind==='table'){
+    const topH=Math.max(3,h*0.06), legW=Math.max(4, Math.min(w,d)*0.06);
+    box(w, topH, d, main, 0, h-topH/2, 0);
+    for(const sx of [-1,1]) for(const sz of [-1,1])
+      box(legW, h-topH, legW, wood, sx*(w/2-legW), (h-topH)/2, sz*(d/2-legW));
+  } else if (kind==='shelf'){
+    const t=Math.max(2, Math.min(w,d)*0.06);
+    box(t, h, d, main, -(w/2-t/2), h/2, 0);
+    box(t, h, d, main,  (w/2-t/2), h/2, 0);
+    box(w, h, t, _shade(main,-0.05), 0, h/2, -d/2+t/2);
+    const n=Math.max(3, Math.round(h/45));
+    for(let i=0;i<=n;i++){ const y=i/n*(h-t)+t/2; box(w-2*t, t, d-t, main, 0, y, t/2); }
+  } else if (kind==='wardrobe'){
+    const t=3;
+    box(w, h, d, _shade(main,-0.06), 0, h/2, 0);
+    box(w*0.485, h*0.96, t, _shade(main,0.05), -w*0.245, h/2, d/2);         // left door
+    box(w*0.485, h*0.96, t, _shade(main,0.05),  w*0.245, h/2, d/2);         // right door
+    box(2, h*0.18, 2, new THREE.Color('#333'), -1.5, h*0.5, d/2+t);
+    box(2, h*0.18, 2, new THREE.Color('#333'),  1.5, h*0.5, d/2+t);
+  } else {
+    box(w, h, d, main, 0, h/2, 0);
+  }
+  // recenter on x/z, keep base at y=0
+  const bb=new THREE.Box3().setFromObject(g), c=bb.getCenter(new THREE.Vector3());
+  g.children.forEach(m=>{ m.position.x-=c.x; m.position.z-=c.z; });
+  return g;
+}
+function _lights(scene){
+  scene.add(new THREE.AmbientLight(0xffffff,0.72));
+  const d1=new THREE.DirectionalLight(0xffffff,0.95); d1.position.set(1.4,2.4,1.7); scene.add(d1);
+  const d2=new THREE.DirectionalLight(0xffffff,0.28); d2.position.set(-1.4,0.7,-1.2); scene.add(d2);
+}
+// one-shot offscreen thumbnail → data URL
+function renderThumb(renderer, kind, w,d,h,hex, size){
+  const scene=new THREE.Scene(); _lights(scene);
+  const obj=buildFurniture(kind,w,d,h,hex); scene.add(obj);
+  const bb=new THREE.Box3().setFromObject(obj), ctr=bb.getCenter(new THREE.Vector3()), s=bb.getSize(new THREE.Vector3());
+  const maxd=Math.max(s.x,s.y,s.z), dist=maxd*2.05;
+  const cam=new THREE.PerspectiveCamera(32,1,1,10000);
+  cam.position.set(ctr.x+dist*0.72, ctr.y+dist*0.62, ctr.z+dist*0.9); cam.lookAt(ctr.x,ctr.y+s.y*0.05,ctr.z);
+  renderer.setSize(size,size); renderer.render(scene,cam);
+  const url=renderer.domElement.toDataURL('image/png');
+  obj.traverse(o=>{ o.geometry&&o.geometry.dispose(); o.material&&o.material.dispose(); });
+  return url;
+}
+// live rotatable 3D view (catalog preview + placement)
+function Furniture3D({ kind, w, d, h, hex, height=260, spin=true, yaw=0.6, drag=true }){
+  const ref=useRef(null);
+  useEffect(()=>{
+    if(typeof THREE==='undefined'||!ref.current) return;
+    const el=ref.current, W=el.clientWidth||260, H=height;
+    const renderer=new THREE.WebGLRenderer({alpha:true, antialias:true});
+    renderer.setPixelRatio(Math.min(2,window.devicePixelRatio||1)); renderer.setSize(W,H);
+    el.appendChild(renderer.domElement);
+    const scene=new THREE.Scene(); _lights(scene);
+    const obj=buildFurniture(kind,w,d,h,hex);
+    const bb=new THREE.Box3().setFromObject(obj), s=bb.getSize(new THREE.Vector3());
+    obj.position.y = -s.y/2;                          // center vertically for rotation
+    const pivot=new THREE.Group(); pivot.add(obj); scene.add(pivot);
+    const maxd=Math.max(s.x,s.y,s.z), dist=maxd*2.1;
+    const cam=new THREE.PerspectiveCamera(32, W/H, 1, 10000);
+    cam.position.set(0, dist*0.35, dist); cam.lookAt(0,0,0);
+    let ry=yaw, rx=0.18, dragging=false, lx=0, ly=0, raf;
+    const cvs=renderer.domElement;
+    const down=e=>{ dragging=true; const p=e.touches?e.touches[0]:e; lx=p.clientX; ly=p.clientY; };
+    const move=e=>{ if(!dragging)return; const p=e.touches?e.touches[0]:e;
+      ry+=(p.clientX-lx)*0.01; rx=Math.max(-0.5,Math.min(0.9,rx+(p.clientY-ly)*0.008)); lx=p.clientX; ly=p.clientY; if(e.cancelable)e.preventDefault(); };
+    const up=()=>{ dragging=false; };
+    if(drag){ cvs.addEventListener('mousedown',down); window.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
+      cvs.addEventListener('touchstart',down,{passive:false}); cvs.addEventListener('touchmove',move,{passive:false}); cvs.addEventListener('touchend',up); }
+    function loop(){ raf=requestAnimationFrame(loop); if(spin&&!dragging) ry+=0.006;
+      pivot.rotation.y=ry; pivot.rotation.x=rx; renderer.render(scene,cam); }
+    loop();
+    return ()=>{ cancelAnimationFrame(raf);
+      if(drag){ cvs.removeEventListener('mousedown',down); window.removeEventListener('mousemove',move); window.removeEventListener('mouseup',up);
+        cvs.removeEventListener('touchstart',down); cvs.removeEventListener('touchmove',move); cvs.removeEventListener('touchend',up); }
+      obj.traverse(o=>{ o.geometry&&o.geometry.dispose(); o.material&&o.material.dispose(); });
+      renderer.dispose(); if(cvs.parentNode) cvs.parentNode.removeChild(cvs);
+    };
+  },[kind,w,d,h,hex,height,spin,yaw,drag]);
+  return <div ref={ref} style={{ width:'100%', height }} />;
+}
+
 function App() {
   const [st, set] = useState({ screen:'intro', cat:'전체', selId:null,
     posX:40, posY:40, rot:false, printed:false, placements:[], shared:false,
     measuredW:null, measuredD:null, accuracy:null });
   const S = (patch) => set(prev => ({ ...prev, ...(typeof patch==='function'?patch(prev):patch) }));
   const go = (s) => S({ screen: s });
+
+  // one-shot 3D thumbnails for the catalog
+  const [thumbs, setThumbs] = useState({});
+  const [previewId, setPreviewId] = useState(null);
+  useEffect(() => {
+    if (typeof THREE === 'undefined') return;
+    let r; try { r = new THREE.WebGLRenderer({ alpha:true, antialias:true, preserveDrawingBuffer:true }); }
+    catch(e){ return; }
+    r.setPixelRatio(Math.min(2, window.devicePixelRatio||1));
+    const out = {};
+    for (const f of FURN) { try { out[f.id] = renderThumb(r, KIND[f.id]||'box', f.w, f.d, f.h, f.fg, 240); } catch(e){} }
+    r.dispose(); setThumbs(out);
+  }, []);
 
   const { screen, cat, selId, posX, posY, rot, printed, placements, shared } = st;
   const roomW = st.measuredW ?? 360, roomD = st.measuredD ?? 300, showDims = true;
@@ -630,13 +759,14 @@ function App() {
       <Scroll style={{paddingTop:0}}>
         <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
           {items.map(f=>(
-            <button key={f.id} onClick={()=>S({selId:f.id, posX:Math.round((roomW-f.w)/2),
-                posY:Math.max(0,Math.round((roomD-f.d)/2)-40), rot:false, screen:'place'})}
+            <button key={f.id} onClick={()=>setPreviewId(f.id)}
               style={{ border:'none', textAlign:'left', cursor:'pointer', fontFamily:'inherit',
                 display:'flex', gap:14, alignItems:'center', background:'#fff', borderRadius:16, padding:14 }}>
-              <div style={{ width:64, height:64, borderRadius:12, flexShrink:0, background:f.fg+'1A',
-                display:'flex', alignItems:'center', justifyContent:'center' }}>
-                <div style={{ width:34, height:26, borderRadius:5, background:f.fg }} />
+              <div style={{ width:64, height:64, borderRadius:12, flexShrink:0, background:f.fg+'12',
+                display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
+                {thumbs[f.id]
+                  ? <img src={thumbs[f.id]} alt={f.name} style={{ width:'100%', height:'100%', objectFit:'contain' }} />
+                  : <div style={{ width:34, height:26, borderRadius:5, background:f.fg }} />}
               </div>
               <div style={{ flex:1, minWidth:0 }}>
                 <Badge size="xsmall" color={f.fg} bg={f.fg+'1A'}>{f.cat}</Badge>
@@ -650,6 +780,31 @@ function App() {
           ))}
         </div>
       </Scroll>
+      {previewId && (() => {
+        const f = FURN.find(x=>x.id===previewId); if(!f) return null; const ok=fitsAny(f);
+        return (
+          <div onClick={()=>setPreviewId(null)} style={{ position:'absolute', inset:0, zIndex:40,
+            display:'flex', flexDirection:'column', justifyContent:'flex-end', background:'rgba(0,0,0,0.35)' }}>
+            <div onClick={e=>e.stopPropagation()} style={{ background:'#fff', borderRadius:'24px 24px 0 0', padding:'8px 20px 28px' }}>
+              <div style={{ width:40, height:4, borderRadius:99, background:'#e5e7eb', margin:'6px auto 8px' }} />
+              <div style={{ background:'#f6f7f9', borderRadius:18, overflow:'hidden' }}>
+                <Furniture3D kind={KIND[f.id]||'box'} w={f.w} d={f.d} h={f.h} hex={f.fg} height={240} />
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:14 }}>
+                <Badge size="xsmall" color={f.fg} bg={f.fg+'1A'}>{f.cat}</Badge>
+                <Badge color={ok?'var(--pos)':'var(--neg)'} bg={ok?'rgba(0,191,64,0.1)':'rgba(255,66,66,0.1)'}>{ok?'배치 가능':'공간 부족'}</Badge>
+              </div>
+              <Type v="title3" weight="bold" style={{marginTop:8}}>{f.name}</Type>
+              <Type v="body2" color="var(--muted)" style={{marginTop:2}}>W{f.w} × D{f.d} × H{f.h}cm · {won(f.price)}</Type>
+              <Type v="caption" color="var(--muted)" style={{marginTop:6}}>드래그해서 돌려볼 수 있어요</Type>
+              <div style={{ display:'flex', gap:10, marginTop:16 }}>
+                <Btn variant="ghost" full={false} onClick={()=>setPreviewId(null)} style={{padding:'14px 18px'}}>닫기</Btn>
+                <Btn onClick={()=>{ S({selId:f.id, posX:Math.round((roomW-f.w)/2), posY:Math.max(0,Math.round((roomD-f.d)/2)-40), rot:false, screen:'place'}); setPreviewId(null); }} style={{flex:1}}>이 가구 배치</Btn>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </Device>
   );
 
@@ -714,13 +869,10 @@ function App() {
             </div>
           )}
           <div style={{ position:'absolute', left:Math.round(fpLeft), width:Math.round(fpW),
-            bottom:bottomFor(rect.y2)+'%', height:Math.round(bodyH) }}>
-            <div style={{ position:'absolute', inset:0, background:faceFront, borderRadius:'3px 3px 0 0',
-              boxShadow:'inset 0 -6px 12px rgba(0,0,0,0.25)', opacity:fits?0.92:0.5,
-              outline:'2px solid '+(fits?'#00BF40':'#FF4242'), outlineOffset:1 }} />
-            <div style={{ position:'absolute', left:0, right:0, top:0, height:Math.round(fpH),
-              transform:'translateY(-100%) perspective(300px) rotateX(60deg)', transformOrigin:'bottom',
-              background:`color-mix(in srgb, ${sel.fg} 60%, white)`, opacity:fits?0.92:0.5 }} />
+            bottom:bottomFor(rect.y2)+'%', height:Math.round(bodyH+fpH+16),
+            opacity:fits?1:0.7, filter:fits?'none':'saturate(0.55)', pointerEvents:'none' }}>
+            <Furniture3D kind={KIND[sel.id]||'box'} w={sel.w} d={sel.d} h={sel.h} hex={sel.fg}
+              height={Math.round(bodyH+fpH+16)} spin={false} yaw={0.5+(rot?Math.PI/2:0)} drag={false} />
           </div>
           <div style={{ position:'absolute', top:'calc(var(--sb) + 56px)', left:20, right:20, zIndex:6,
             background:fits?'rgba(0,191,64,0.14)':'rgba(255,66,66,0.14)', backdropFilter:'blur(12px)',
