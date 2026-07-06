@@ -911,10 +911,32 @@ function App() {
               <Type v="body2" weight="bold" color="#fff">{sel.name} · {effW}cm × {effD}cm</Type>
             </div>
           </div>
-          <div style={{ position:'absolute', left:12, right:12, bottom:6, height:'46%',
-            transform:'perspective(600px) rotateX(52deg)', transformOrigin:'bottom',
-            background:'linear-gradient(rgba(255,255,255,0.09) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.09) 1px,transparent 1px)',
-            backgroundSize:'40px 40px', borderRadius:4 }} />
+          {/* room floor, walls & 100cm grid — same projection as furniture */}
+          <div style={{ position:'absolute', left:12, width:Math.round(roomW*sc),
+            bottom:bottomFor(roomD)+'%', height:(bottomFor(0)-bottomFor(roomD))+'%',
+            background:'rgba(255,255,255,0.035)',
+            backgroundImage:'linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)',
+            backgroundSize:`${Math.round(100*sc)}px ${(100/roomD*100).toFixed(1)}%`,
+            border:'1.5px solid rgba(255,255,255,0.3)', borderRadius:3,
+            boxShadow:'inset 0 10px 26px rgba(0,0,0,0.4)' }}>
+            <div style={{ position:'absolute', left:0, right:0, top:0, height:14, pointerEvents:'none',
+              background:'linear-gradient(rgba(255,255,255,0.16), rgba(255,255,255,0))',
+              borderBottom:'1px solid rgba(255,255,255,0.16)' }} />
+          </div>
+          {/* width (가로) dimension */}
+          <div style={{ position:'absolute', left:12, width:Math.round(roomW*sc), bottom:'2.5%',
+            display:'flex', alignItems:'center', gap:6 }}>
+            <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.22)' }} />
+            <Type v="caption" weight="bold" color="rgba(255,255,255,0.72)">가로 {roomWText}</Type>
+            <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.22)' }} />
+          </div>
+          {/* depth (세로) dimension */}
+          <div style={{ position:'absolute', left:Math.round(12+roomW*sc)+6,
+            bottom:bottomFor(roomD)+'%', height:(bottomFor(0)-bottomFor(roomD))+'%',
+            display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <Type v="caption" weight="bold" color="rgba(255,255,255,0.72)"
+              style={{ writingMode:'vertical-rl' }}>세로 {roomDText}</Type>
+          </div>
           <div style={{ position:'absolute', left:12+(roomW-DOOR)*sc, width:DOOR*sc, bottom:bottomFor(roomD)+'%', height:34,
             background:'repeating-linear-gradient(45deg,rgba(255,146,0,0.28) 0 8px,transparent 8px 16px)',
             border:'1px dashed #f59e0b', borderRadius:4 }}>
