@@ -710,12 +710,13 @@ function RoomViewer3D({ roomW, roomD, doorMM, sel, selCx, selCz, selRot, fits, g
     scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(arcPts), new THREE.LineBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.5})));
     const dimW=_dimSprite(Wm.toFixed(1)+' m'); dimW.position.set(cx,0.03,-0.5); scene.add(dimW);
     const dimH=_dimSprite(Dm.toFixed(1)+' m'); dimH.position.set(-0.6,0.03,cz); scene.add(dimH);
+    const ghostMeshes=[];
     (ghosts||[]).forEach(g=>{
       const geo=new THREE.BoxGeometry(g.w/100, g.h/100, g.d/100); geo.translate(0,g.h/200,0);
       const m=new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:new THREE.Color(g.color), roughness:0.9, transparent:true, opacity:0.45}));
-      m.position.set(g.cx/100,0,g.cz/100); m.castShadow=true;
+      m.position.set(g.cx/100,0,g.cz/100); m.castShadow=true; m.scale.y=0.012;
       m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({color:0x26313A, transparent:true, opacity:0.25})));
-      scene.add(m);
+      scene.add(m); ghostMeshes.push(m);
     });
     const sGeo=new THREE.BoxGeometry(sel.w/100, sel.h/100, sel.d/100); sGeo.translate(0,sel.h/200,0);
     const selMesh=new THREE.Mesh(sGeo, new THREE.MeshStandardMaterial({color:new THREE.Color(sel.color), roughness:0.85}));
@@ -747,6 +748,7 @@ function RoomViewer3D({ roomW, roomD, doorMM, sel, selCx, selCz, selRot, fits, g
       let ext=0; walls.forEach(w=>{ w.scale.y+=(extGoal-w.scale.y)*w.userData.lerp; ext+=w.scale.y; }); ext/=walls.length;
       amb.intensity=0.9-0.3*ext; dir.intensity=0.2+0.55*ext; dimW.material.opacity=0.35+0.65*(1-ext); dimH.material.opacity=0.35+0.65*(1-ext);
       selMesh.scale.y+=((S.mode==='3d'?1:0.06)-selMesh.scale.y)*0.09;
+      ghostMeshes.forEach(gm=>{ gm.scale.y+=((S.mode==='3d'?1:0.06)-gm.scale.y)*0.09; });
       if(!dragging){ selMesh.position.x+=(S.selCx/100-selMesh.position.x)*0.3; selMesh.position.z+=(S.selCz/100-selMesh.position.z)*0.3; }
       const tr=THREE.MathUtils.degToRad(S.selRot); rotCur+=(tr-rotCur)*0.2; selMesh.rotation.y=rotCur;
       selMesh.material.emissive.setHex(S.fits?0x000000:0x8f2b20); selMesh.material.emissiveIntensity=S.fits?0:0.5;
