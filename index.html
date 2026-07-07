@@ -649,10 +649,124 @@ function ManualScreen({ initialW=360, initialD=300, onApply, onBack }){
   );
 }
 
+/* ─── room viewer: schematic (plan) ↔ 3D, real measured room + furniture ─── */
+function _dimSprite(text){
+  const cv=document.createElement('canvas'); cv.width=512; cv.height=128;
+  const ctx=cv.getContext('2d');
+  ctx.font='600 60px ui-monospace, Menlo, Consolas, monospace';
+  ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#26313A';
+  ctx.fillText(text,256,66);
+  const tex=new THREE.CanvasTexture(cv); tex.minFilter=THREE.LinearFilter;
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false }));
+  sp.scale.set(1.5,0.375,1); sp.renderOrder=10; return sp;
+}
+function RoomViewer3D({ roomW, roomD, doorMM, sel, selCx, selCz, selRot, fits, ghosts, mode, onDrag }){
+  const mountRef = useRef(null);
+  const stateRef = useRef({});
+  stateRef.current = { selCx, selCz, selRot, fits, mode, onDrag, sel };
+  useEffect(()=>{
+    if(typeof THREE==='undefined' || !mountRef.current) return;
+    const mount=mountRef.current;
+    const Wm=roomW/100, Dm=roomD/100, doorM=doorMM/100;
+    const scene=new THREE.Scene(); scene.background=new THREE.Color('#E7EAE3');
+    const camera=new THREE.PerspectiveCamera(42, mount.clientWidth/Math.max(mount.clientHeight,1), 0.1, 100);
+    const renderer=new THREE.WebGLRenderer({ antialias:true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+    renderer.setSize(mount.clientWidth, mount.clientHeight);
+    renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+    mount.appendChild(renderer.domElement);
+    const el=renderer.domElement; el.style.touchAction='none'; el.style.display='block'; el.style.cursor='grab';
+    const cx=Wm/2, cz=Dm/2, span=Math.max(Wm,Dm), target=new THREE.Vector3(cx,0,cz);
+    const amb=new THREE.AmbientLight(0xffffff,0.9); scene.add(amb);
+    scene.add(new THREE.HemisphereLight(0xffffff,0xd8dcd2,0.3));
+    const dir=new THREE.DirectionalLight(0xfff6e6,0.2); dir.position.set(cx+5,9,cz+3.5); dir.castShadow=true;
+    dir.shadow.mapSize.set(1024,1024); dir.shadow.camera.left=-8; dir.shadow.camera.right=8; dir.shadow.camera.top=8; dir.shadow.camera.bottom=-8; dir.shadow.camera.near=0.5; dir.shadow.camera.far=30;
+    dir.target.position.copy(target); scene.add(dir); scene.add(dir.target);
+    const ground=new THREE.Mesh(new THREE.PlaneGeometry(40,40), new THREE.ShadowMaterial({opacity:0.16}));
+    ground.rotation.x=-Math.PI/2; ground.position.set(cx,-0.005,cz); ground.receiveShadow=true; scene.add(ground);
+    const floor=new THREE.Mesh(new THREE.PlaneGeometry(Wm,Dm), new THREE.MeshStandardMaterial({color:0xF0EFE8, roughness:1, side:THREE.DoubleSide}));
+    floor.rotation.x=-Math.PI/2; floor.position.set(cx,0,cz); floor.receiveShadow=true; scene.add(floor);
+    const gsz=Math.ceil(span)+2; const grid=new THREE.GridHelper(gsz, gsz, 0xB4BCB1, 0xC9D0C5);
+    grid.position.set(cx,0.01,cz); grid.material.transparent=true; grid.material.opacity=0.5; scene.add(grid);
+    const outline=[[0,0],[Wm,0],[Wm,Dm],[0,Dm]]; const wallH=2.4, wallT=0.1;
+    const wallMat=new THREE.MeshStandardMaterial({color:0xF8F8F3, roughness:0.95, side:THREE.DoubleSide, transparent:true, opacity:0.96});
+    const wallEdgeMat=new THREE.LineBasicMaterial({color:0x26313A, transparent:true, opacity:0.5});
+    const walls=[];
+    for(let i=0;i<outline.length;i++){
+      const [x1,z1]=outline[i], [x2,z2]=outline[(i+1)%outline.length];
+      const len=Math.hypot(x2-x1,z2-z1);
+      const geo=new THREE.BoxGeometry(len+wallT, wallH, wallT); geo.translate(0,wallH/2,0);
+      const wall=new THREE.Mesh(geo, wallMat); wall.position.set((x1+x2)/2,0,(z1+z2)/2);
+      wall.rotation.y=-Math.atan2(z2-z1,x2-x1); wall.castShadow=true; wall.receiveShadow=true;
+      wall.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), wallEdgeMat));
+      wall.userData.lerp=0.06+i*0.013; wall.scale.y=0.012; scene.add(wall); walls.push(wall);
+    }
+    // door on front wall (z=Dm), right side
+    const dx0=Math.max(0,Wm-doorM);
+    const strip=new THREE.Mesh(new THREE.PlaneGeometry(Math.min(doorM,Wm), wallT*2.2), new THREE.MeshBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.55, side:THREE.DoubleSide}));
+    strip.rotation.x=-Math.PI/2; strip.position.set((dx0+Wm)/2,0.02,Dm); scene.add(strip);
+    const arcPts=[]; for(let t=0;t<=20;t++){ const a=(t/20)*(Math.PI/2); arcPts.push(new THREE.Vector3(dx0+Math.cos(a)*doorM,0.02, Dm-Math.sin(a)*doorM)); }
+    arcPts.push(new THREE.Vector3(dx0,0.02,Dm));
+    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(arcPts), new THREE.LineBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.5})));
+    const dimW=_dimSprite(Wm.toFixed(1)+' m'); dimW.position.set(cx,0.03,-0.5); scene.add(dimW);
+    const dimH=_dimSprite(Dm.toFixed(1)+' m'); dimH.position.set(-0.6,0.03,cz); scene.add(dimH);
+    (ghosts||[]).forEach(g=>{
+      const geo=new THREE.BoxGeometry(g.w/100, g.h/100, g.d/100); geo.translate(0,g.h/200,0);
+      const m=new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:new THREE.Color(g.color), roughness:0.9, transparent:true, opacity:0.45}));
+      m.position.set(g.cx/100,0,g.cz/100); m.castShadow=true;
+      m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({color:0x26313A, transparent:true, opacity:0.25})));
+      scene.add(m);
+    });
+    const sGeo=new THREE.BoxGeometry(sel.w/100, sel.h/100, sel.d/100); sGeo.translate(0,sel.h/200,0);
+    const selMesh=new THREE.Mesh(sGeo, new THREE.MeshStandardMaterial({color:new THREE.Color(sel.color), roughness:0.85}));
+    selMesh.castShadow=true; selMesh.position.set(selCx/100,0,selCz/100); selMesh.rotation.y=THREE.MathUtils.degToRad(selRot);
+    selMesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(sGeo), new THREE.LineBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.9})));
+    scene.add(selMesh);
+    const PLAN={theta:0,phi:0.06,radius:span*1.85}, V3D={theta:-0.7,phi:1.0,radius:span*1.55};
+    const camS={...PLAN}, goal={...PLAN}; let extGoal=0.012, rotCur=THREE.MathUtils.degToRad(selRot), lastMode=mode;
+    const ray=new THREE.Raycaster(), ndc=new THREE.Vector2(), fp=new THREE.Plane(new THREE.Vector3(0,1,0),0), hit=new THREE.Vector3();
+    let dragging=false, dragOff={x:0,z:0}, orbiting=false, lastX=0, lastY=0;
+    const setNDC=e=>{ const r=el.getBoundingClientRect(); ndc.x=((e.clientX-r.left)/r.width)*2-1; ndc.y=-((e.clientY-r.top)/r.height)*2+1; };
+    const clamp=(x,z)=>{ const rr=(stateRef.current.selRot%180)!==0; const ew=(rr?sel.d:sel.w)/100, ed=(rr?sel.w:sel.d)/100;
+      return { x:Math.min(Wm-ew/2, Math.max(ew/2,x)), z:Math.min(Dm-ed/2, Math.max(ed/2,z)) }; };
+    const onDown=e=>{ setNDC(e); ray.setFromCamera(ndc,camera); const h=ray.intersectObject(selMesh,true);
+      if(h.length>0){ dragging=true; if(ray.ray.intersectPlane(fp,hit)) dragOff={x:selMesh.position.x-hit.x, z:selMesh.position.z-hit.z}; el.style.cursor='grabbing'; }
+      else if(stateRef.current.mode==='3d'){ orbiting=true; el.style.cursor='grabbing'; }
+      lastX=e.clientX; lastY=e.clientY; try{el.setPointerCapture(e.pointerId);}catch(_){} };
+    const onMove=e=>{ if(dragging){ setNDC(e); ray.setFromCamera(ndc,camera); if(ray.ray.intersectPlane(fp,hit)){ const c=clamp(hit.x+dragOff.x, hit.z+dragOff.z); selMesh.position.x=c.x; selMesh.position.z=c.z; stateRef.current.onDrag(Math.round(c.x*100), Math.round(c.z*100)); } }
+      else if(orbiting){ const dx=e.clientX-lastX, dy=e.clientY-lastY; camS.theta-=dx*0.005; camS.phi=Math.min(1.4,Math.max(0.08,camS.phi-dy*0.005)); goal.theta=camS.theta; goal.phi=camS.phi; }
+      lastX=e.clientX; lastY=e.clientY; };
+    const onUp=()=>{ dragging=false; orbiting=false; el.style.cursor='grab'; };
+    const onWheel=e=>{ e.preventDefault(); camS.radius=Math.min(span*3.4, Math.max(span*0.7, camS.radius*(1+e.deltaY*0.0012))); goal.radius=camS.radius; };
+    el.addEventListener('pointerdown',onDown); el.addEventListener('pointermove',onMove); el.addEventListener('pointerup',onUp); el.addEventListener('pointercancel',onUp); el.addEventListener('wheel',onWheel,{passive:false});
+    let raf;
+    const animate=()=>{ raf=requestAnimationFrame(animate); const S=stateRef.current;
+      if(S.mode!==lastMode){ lastMode=S.mode; const p=S.mode==='plan'?PLAN:V3D; goal.theta=p.theta; goal.phi=p.phi; goal.radius=p.radius; extGoal=S.mode==='plan'?0.012:1; }
+      camS.theta+=(goal.theta-camS.theta)*0.08; camS.phi+=(goal.phi-camS.phi)*0.08; camS.radius+=(goal.radius-camS.radius)*0.08;
+      camera.position.set(target.x+camS.radius*Math.sin(camS.phi)*Math.sin(camS.theta), target.y+camS.radius*Math.cos(camS.phi), target.z+camS.radius*Math.sin(camS.phi)*Math.cos(camS.theta)); camera.lookAt(target);
+      let ext=0; walls.forEach(w=>{ w.scale.y+=(extGoal-w.scale.y)*w.userData.lerp; ext+=w.scale.y; }); ext/=walls.length;
+      amb.intensity=0.9-0.3*ext; dir.intensity=0.2+0.55*ext; dimW.material.opacity=0.35+0.65*(1-ext); dimH.material.opacity=0.35+0.65*(1-ext);
+      selMesh.scale.y+=((S.mode==='3d'?1:0.06)-selMesh.scale.y)*0.09;
+      if(!dragging){ selMesh.position.x+=(S.selCx/100-selMesh.position.x)*0.3; selMesh.position.z+=(S.selCz/100-selMesh.position.z)*0.3; }
+      const tr=THREE.MathUtils.degToRad(S.selRot); rotCur+=(tr-rotCur)*0.2; selMesh.rotation.y=rotCur;
+      selMesh.material.emissive.setHex(S.fits?0x000000:0x8f2b20); selMesh.material.emissiveIntensity=S.fits?0:0.5;
+      renderer.render(scene,camera);
+    };
+    animate();
+    const ro=new ResizeObserver(()=>{ const w=mount.clientWidth,h=mount.clientHeight; if(!w||!h)return; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix(); }); ro.observe(mount);
+    return ()=>{ cancelAnimationFrame(raf); ro.disconnect();
+      el.removeEventListener('pointerdown',onDown); el.removeEventListener('pointermove',onMove); el.removeEventListener('pointerup',onUp); el.removeEventListener('pointercancel',onUp); el.removeEventListener('wheel',onWheel);
+      scene.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material){ if(o.material.map)o.material.map.dispose(); o.material.dispose(); } });
+      if(el.parentNode===mount) mount.removeChild(el); renderer.dispose();
+    };
+  }, [roomW, roomD, doorMM, (ghosts||[]).map(g=>g.key).join(','), sel && sel.id]);
+  return <div ref={mountRef} style={{ position:'absolute', inset:0 }} />;
+}
+
 function App() {
   const [st, set] = useState({ screen:'intro', cat:'전체', selId:null,
     posX:40, posY:40, rot:false, printed:false, placements:[], shared:false,
-    measuredW:null, measuredD:null, accuracy:null, source:null });
+    measuredW:null, measuredD:null, accuracy:null, source:null, viewMode:'plan' });
   const S = (patch) => set(prev => ({ ...prev, ...(typeof patch==='function'?patch(prev):patch) }));
   const go = (s) => S({ screen: s });
 
@@ -876,103 +990,55 @@ function App() {
   );
 
   if (screen==='place') {
-    const faceFront=sel.fg;
+    const selCx = clampedPos + effW/2, selCz = posYc + effD/2;
+    const ghosts = placements.map(p=>({ key:p.key, w:p.effW, d:p.effD, h:p.h??80,
+      cx:(p.posX + p.effW/2), cz:((p.posY??0) + p.effD/2), color:p.fg }));
     return (
-      <Device dark footer={
-        <div style={{display:'flex',flexDirection:'column',gap:14}}>
-          <div>
-            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
-              <Type v="body2" weight="bold" color="#fff">좌우</Type>
-              <Btn size="small" full={false} variant={rot?'solid':'ghost'} onClick={()=>S(p=>({rot:!p.rot}))}
-                style={{padding:'6px 12px'}}>회전 90°</Btn>
-            </div>
-            <input type="range" min="0" max={posMax} value={clampedPos}
-              onChange={e=>S({posX:Number(e.target.value)})} style={{width:'100%'}} />
-          </div>
-          <div>
-            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
-              <Type v="body2" weight="bold" color="#fff">앞뒤</Type>
-              <Type v="body2" color="rgba(255,255,255,0.6)">벽에서 {Math.round(posYc)}cm</Type>
-            </div>
-            <input type="range" min="0" max={posYMax} value={posYc}
-              onChange={e=>S({posY:Number(e.target.value)})} style={{width:'100%'}} />
-          </div>
+      <Device footer={
+        <div style={{display:'flex', gap:10}}>
+          <Btn variant="outlined" full={false} onClick={()=>S(p=>({rot:!p.rot}))} style={{padding:'14px 16px'}}>회전 90°</Btn>
           <Btn disabled={!fits} onClick={()=>S(p=>({
               placements:[...p.placements,{key:Date.now(),name:sel.name,fg:sel.fg,price:sel.price,
                 posX:clampedPos,posY:posYc,h:sel.h,effW,effD,gap:Math.round(gap)}],
-              screen:'saved', shared:false }))}>이 배치 저장</Btn>
+              screen:'saved', shared:false }))} style={{flex:1}}>이 배치 저장</Btn>
         </div>}>
-        <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)',
-          background:'radial-gradient(120% 90% at 50% 20%, #263140 0%, #0c1017 100%)' }}>
-          <div style={{ position:'absolute', top:'calc(var(--sb) + 12px)', left:0, right:0, display:'flex', justifyContent:'center', zIndex:5 }}>
-            <div style={{ background:'rgba(255,255,255,0.14)', backdropFilter:'blur(10px)', borderRadius:99,
-              padding:'8px 16px', display:'flex', gap:8, alignItems:'center' }}>
-              <span style={{width:8,height:8,borderRadius:'50%',background:sel.fg}} />
-              <Type v="body2" weight="bold" color="#fff">{sel.name} · {effW}cm × {effD}cm</Type>
+        <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)', background:'#E7EAE3' }}>
+          <RoomViewer3D roomW={roomW} roomD={roomD} doorMM={DOOR}
+            sel={{ id:sel.id, w:sel.w, d:sel.d, h:sel.h, color:sel.fg }}
+            selCx={selCx} selCz={selCz} selRot={rot?90:0} fits={fits} ghosts={ghosts}
+            mode={st.viewMode}
+            onDrag={(cx,cz)=>S({ posX: Math.round(cx-effW/2), posY: Math.round(cz-effD/2) })} />
+          {/* top: furniture chip + plan/3D toggle */}
+          <div style={{ position:'absolute', top:'calc(var(--sb) + 10px)', left:12, right:12, zIndex:6,
+            display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
+            <div style={{ display:'flex', gap:8, alignItems:'center', background:'rgba(247,247,242,0.92)',
+              border:'1px solid rgba(38,49,58,0.25)', borderRadius:99, padding:'7px 12px' }}>
+              <span style={{width:9,height:9,borderRadius:2,background:sel.fg}} />
+              <Type v="body2" weight="bold" color="#26313A">{sel.name} · {effW}×{effD}cm</Type>
+            </div>
+            <div style={{ display:'flex', background:'#DDE1D9', border:'1px solid rgba(38,49,58,0.25)', borderRadius:9, padding:3, flexShrink:0 }}>
+              {[['plan','도식'],['3d','3D']].map(([k,l])=>(
+                <button key={k} onClick={()=>S({viewMode:k})} style={{ border:'none', cursor:'pointer', borderRadius:7,
+                  padding:'6px 13px', fontSize:13, fontWeight:700, fontFamily:'inherit',
+                  background: st.viewMode===k?'#26313A':'transparent', color: st.viewMode===k?'#F0EFE8':'#26313A' }}>{l}</button>
+              ))}
             </div>
           </div>
-          {/* room floor, walls & 100cm grid — same projection as furniture */}
-          <div style={{ position:'absolute', left:12, width:Math.round(roomW*sc),
-            bottom:bottomFor(roomD)+'%', height:(bottomFor(0)-bottomFor(roomD))+'%',
-            background:'rgba(255,255,255,0.035)',
-            backgroundImage:'linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)',
-            backgroundSize:`${Math.round(100*sc)}px ${(100/roomD*100).toFixed(1)}%`,
-            border:'1.5px solid rgba(255,255,255,0.3)', borderRadius:3,
-            boxShadow:'inset 0 10px 26px rgba(0,0,0,0.4)' }}>
-            <div style={{ position:'absolute', left:0, right:0, top:0, height:14, pointerEvents:'none',
-              background:'linear-gradient(rgba(255,255,255,0.16), rgba(255,255,255,0))',
-              borderBottom:'1px solid rgba(255,255,255,0.16)' }} />
+          {/* usage hint */}
+          <div style={{ position:'absolute', bottom:78, right:12, zIndex:6, fontSize:10, color:'#5C6A66',
+            fontFamily:'ui-monospace, Menlo, monospace', textAlign:'right', lineHeight:1.6,
+            background:'rgba(247,247,242,0.82)', border:'1px solid rgba(38,49,58,0.15)', padding:'5px 8px', borderRadius:6 }}>
+            가구 드래그 = 이동<br/>{st.viewMode==='3d'?'빈 곳 드래그 = 시점 회전':'스크롤 = 확대·축소'}
           </div>
-          {/* width (가로) dimension */}
-          <div style={{ position:'absolute', left:12, width:Math.round(roomW*sc), bottom:'2.5%',
-            display:'flex', alignItems:'center', gap:6 }}>
-            <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.22)' }} />
-            <Type v="caption" weight="bold" color="rgba(255,255,255,0.72)">가로 {roomWText}</Type>
-            <div style={{ flex:1, height:1, background:'rgba(255,255,255,0.22)' }} />
-          </div>
-          {/* depth (세로) dimension */}
-          <div style={{ position:'absolute', left:Math.round(12+roomW*sc)+6,
-            bottom:bottomFor(roomD)+'%', height:(bottomFor(0)-bottomFor(roomD))+'%',
-            display:'flex', alignItems:'center', justifyContent:'center' }}>
-            <Type v="caption" weight="bold" color="rgba(255,255,255,0.72)"
-              style={{ writingMode:'vertical-rl' }}>세로 {roomDText}</Type>
-          </div>
-          <div style={{ position:'absolute', left:12+(roomW-DOOR)*sc, width:DOOR*sc, bottom:bottomFor(roomD)+'%', height:34,
-            background:'repeating-linear-gradient(45deg,rgba(255,146,0,0.28) 0 8px,transparent 8px 16px)',
-            border:'1px dashed #f59e0b', borderRadius:4 }}>
-            <div style={{ position:'absolute', top:-18, left:0, right:0, textAlign:'center' }}>
-              <Type v="caption" weight="bold" color="#f59e0b">문 개폐 공간</Type></div>
-          </div>
-          {placements.map(p=>(
-            <div key={p.key} style={{ position:'absolute', left:Math.round(12+p.posX*sc),
-              width:Math.max(30,Math.round(p.effW*sc)), bottom:bottomFor((p.posY??0)+p.effD)+'%',
-              height:Math.max(20,Math.round((p.h??80)*sc*0.7)), background:p.fg+'55',
-              border:'1px solid '+p.fg+'99', borderRadius:3 }} />
-          ))}
-          {fits && gap>12 && (
-            <div style={{ position:'absolute', left:Math.round(fpLeft+fpW), width:Math.max(0,Math.round(gap*sc)),
-              bottom:(bottomFor(rect.y2)-0.6)+'%', height:0, borderTop:'2px dashed #00BF40',
-              display:'flex', alignItems:'center', justifyContent:'center' }}>
-              <span style={{ position:'absolute', top:-18, whiteSpace:'nowrap', fontSize:11, fontWeight:700,
-                color:'#00BF40', background:'rgba(0,0,0,0.4)', padding:'1px 6px', borderRadius:5 }}>{Math.round(gap)}cm 여유</span>
-            </div>
-          )}
-          <div style={{ position:'absolute', left:Math.round(fpLeft), width:Math.round(fpW),
-            bottom:bottomFor(rect.y2)+'%', height:Math.round(bodyH+fpH+16),
-            opacity:fits?1:0.7, filter:fits?'none':'saturate(0.55)', pointerEvents:'none' }}>
-            <Furniture3D kind={KIND[sel.id]||'box'} w={sel.w} d={sel.d} h={sel.h} hex={sel.fg}
-              height={Math.round(bodyH+fpH+16)} spin={false} yaw={0.5+(rot?Math.PI/2:0)} drag={false} />
-          </div>
-          <div style={{ position:'absolute', top:'calc(var(--sb) + 56px)', left:20, right:20, zIndex:6,
-            background:fits?'rgba(0,191,64,0.14)':'rgba(255,66,66,0.14)', backdropFilter:'blur(12px)',
-            border:'1px solid '+(fits?'rgba(0,191,64,0.5)':'rgba(255,66,66,0.5)'), borderRadius:16, padding:'13px 15px',
-            display:'flex', gap:12, alignItems:'center' }}>
-            <div style={{ width:30, height:30, borderRadius:'50%', flexShrink:0, background:fits?'#00BF40':'#FF4242',
-              color:'#fff', fontWeight:800, fontSize:17, display:'flex', alignItems:'center', justifyContent:'center' }}>
-              {fits?'✓':'!'}</div>
+          {/* verdict */}
+          <div style={{ position:'absolute', bottom:12, left:12, right:12, zIndex:6,
+            display:'flex', gap:11, alignItems:'center', background:'rgba(247,247,242,0.96)',
+            border:'1px solid '+(fits?'rgba(94,125,98,0.6)':'rgba(178,58,42,0.6)'), borderRadius:14, padding:'11px 13px' }}>
+            <div style={{ width:26, height:26, borderRadius:'50%', flexShrink:0, background:fits?'#5E7D62':'#B23A2A',
+              color:'#fff', fontWeight:800, fontSize:15, display:'flex', alignItems:'center', justifyContent:'center' }}>{fits?'✓':'!'}</div>
             <div>
-              <Type v="body" weight="bold" color="#fff">{verdictTitle}</Type>
-              <Type v="body2" color="rgba(255,255,255,0.8)" style={{marginTop:2}}>{verdictBody}</Type>
+              <Type v="body2" weight="bold" color="#26313A">{verdictTitle}</Type>
+              <Type v="caption" color="#5C6A66" style={{marginTop:1}}>{verdictBody}</Type>
             </div>
           </div>
         </div>
