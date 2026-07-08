@@ -616,7 +616,7 @@ function _dimSprite(text){
   const cv=document.createElement('canvas'); cv.width=512; cv.height=128;
   const ctx=cv.getContext('2d');
   ctx.font='600 60px ui-monospace, Menlo, Consolas, monospace';
-  ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#26313A';
+  ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#111827';
   ctx.fillText(text,256,66);
   const tex=new THREE.CanvasTexture(cv); tex.minFilter=THREE.LinearFilter;
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false }));
@@ -647,7 +647,7 @@ function _pmSnap(raw, prev, on){ let p={x:Math.round(raw.x/0.1)*0.1, z:Math.roun
     if(len>0.05){ const sa=Math.round(Math.atan2(dz,dx)/(Math.PI/4))*(Math.PI/4), sl=Math.max(0.1,Math.round(len/0.05)*0.05);
       p={x:Math.round((prev.x+Math.cos(sa)*sl)*100)/100, z:Math.round((prev.z+Math.sin(sa)*sl)*100)/100}; } }
   return p; }
-const PM_PYEONG=3.305785, PM_C={ page:'#E7EAE3', paper:'#F0EFE8', ink:'#26313A', soft:'#5C6A66', hair:'rgba(38,49,58,0.22)', blue:'#2B50C8', red:'#B23A2A', green:'#5E7D62' };
+const PM_PYEONG=3.305785, PM_C={ page:'#F2F2F7', paper:'#FFFFFF', ink:'#111827', soft:'#6b7280', hair:'rgba(17,24,39,0.10)', blue:'#0066FF', red:'#FF4242', green:'#00BF40' };
 
 /* ─── project coplanar marker 3D positions → 2D floor outline (Newell + plane basis) ─── */
 const _cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
@@ -912,8 +912,9 @@ function PolygonMeasure({ onDone, onBack }){
     if(Math.hypot(mx+nx*0.1-cen.x,mz+nz*0.1-cen.z)<Math.hypot(mx-cen.x,mz-cen.z)){ nx=-nx; nz=-nz; }
     return {i:w.i, x:mx+nx*0.34, z:mz+nz*0.34, len}; });
   const mono='ui-monospace, Menlo, Consolas, monospace';
-  const btn={ fontFamily:'inherit', fontSize:12, fontWeight:600, cursor:'pointer', background:'transparent', color:PM_C.ink,
-    border:'1px solid rgba(38,49,58,0.4)', borderRadius:6, padding:'6px 10px' };
+  const btn={ fontFamily:'inherit', fontSize:12.5, fontWeight:700, cursor:'pointer', background:'#fff', color:'#374151',
+    border:'1px solid rgba(17,24,39,0.12)', borderRadius:99, padding:'7px 12px',
+    transition:'background .15s, color .15s, box-shadow .15s', boxShadow:'0 1px 3px rgba(16,24,40,.05)' };
   return (
     <Device footer={
       <div style={{display:'flex', gap:10}}>
@@ -922,29 +923,33 @@ function PolygonMeasure({ onDone, onBack }){
       </div>}>
       <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)', background:PM_C.page,
         display:'flex', flexDirection:'column' }}>
-        <div style={{ padding:'6px 16px 4px' }}>
-          <button onClick={onBack} style={{ border:'none', background:'none', cursor:'pointer', padding:0, color:PM_C.blue, fontWeight:700, fontSize:14 }}>← 뒤로</button>
-          <div style={{ fontSize:18, fontWeight:800, color:PM_C.ink, marginTop:2 }}>다각형 방 측정</div>
-          <div style={{ fontSize:12.5, color:PM_C.soft, marginTop:1 }}>격자를 탭해 방 모서리마다 측점을 찍고, 첫 점을 다시 탭하면 닫혀요.</div>
+        <div style={{ padding:'6px 20px 0' }}>
+          <button onClick={onBack} style={{ border:'none', background:'none', cursor:'pointer', padding:0, color:'var(--accent)', fontWeight:700, fontSize:14, fontFamily:'inherit' }}>← 뒤로</button>
         </div>
-        <div className="no-sb" style={{ display:'flex', gap:6, overflowX:'auto', padding:'0 16px 8px', alignItems:'center' }}>
-          <span style={{ flexShrink:0, fontSize:11.5, fontWeight:700, color:PM_C.soft, marginRight:2 }}>방 크기 예시</span>
+        <div style={{ padding:'2px 20px 12px' }}>
+          <Type v="title2" weight="bold" style={{letterSpacing:-0.5}}>다각형 방 측정</Type>
+          <Type v="body2" color="var(--muted)" style={{marginTop:4}}>격자를 탭해 방 모서리마다 측점을 찍고, 첫 점을 다시 탭하면 닫혀요.</Type>
+        </div>
+        <div className="no-sb" style={{ display:'flex', gap:8, overflowX:'auto', padding:'0 20px 10px', alignItems:'center' }}>
+          <span style={{ flexShrink:0, fontSize:12, fontWeight:700, color:'var(--muted)', marginRight:2 }}>방 크기 예시</span>
           {PM_EXAMPLES.map(ex=>(
-            <button key={ex.n} onClick={()=>loadPreset(ex.pts)} style={{ flexShrink:0, fontFamily:'inherit', fontSize:12,
-              fontWeight:600, cursor:'pointer', background:PM_C.paper, color:PM_C.ink, border:`1px solid rgba(38,49,58,0.3)`,
-              borderRadius:99, padding:'6px 12px', whiteSpace:'nowrap' }}>{ex.n}</button>
+            <button key={ex.n} onClick={()=>loadPreset(ex.pts)} style={{ flexShrink:0, fontFamily:'inherit', fontSize:13,
+              fontWeight:600, cursor:'pointer', background:'#fff', color:'#374151', border:'none',
+              boxShadow:'inset 0 0 0 1px var(--line), 0 1px 3px rgba(16,24,40,.05)',
+              borderRadius:99, padding:'7px 13px', whiteSpace:'nowrap' }}>{ex.n}</button>
           ))}
         </div>
-        <div style={{ flex:1, position:'relative', minHeight:0 }}>
+        <div style={{ flex:1, position:'relative', minHeight:0, margin:'0 16px', background:'#fff', borderRadius:18,
+          boxShadow:'var(--card)', border:'1px solid rgba(17,24,39,.04)', overflow:'hidden' }}>
           <svg ref={svgRef} viewBox="-0.7 -0.7 11.4 8.4"
             style={{ position:'absolute', inset:0, width:'100%', height:'100%', touchAction:'none', cursor:closed?'default':'crosshair' }}
             onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onPointerLeave={()=>setHover(null)}>
             <defs><pattern id="pmg" width="1" height="1" patternUnits="userSpaceOnUse">
-              <path d="M 0.5 0 V 1 M 0 0.5 H 1" stroke="#C9D0C5" strokeWidth="0.015" fill="none"/>
-              <path d="M 1 0 V 1 M 0 1 H 1" stroke="#B4BCB1" strokeWidth="0.02" fill="none"/></pattern></defs>
-            <rect x="0" y="0" width="10" height="7" fill={PM_C.paper} stroke={PM_C.hair} strokeWidth="0.03"/>
+              <path d="M 0.5 0 V 1 M 0 0.5 H 1" stroke="#EDF1F6" strokeWidth="0.015" fill="none"/>
+              <path d="M 1 0 V 1 M 0 1 H 1" stroke="#DFE6EE" strokeWidth="0.02" fill="none"/></pattern></defs>
+            <rect x="0" y="0" width="10" height="7" rx="0.12" fill="#FAFBFD" stroke={PM_C.hair} strokeWidth="0.03"/>
             <rect x="0" y="0" width="10" height="7" fill="url(#pmg)"/>
-            {closed&&n>=3&&<polygon points={points.map(p=>`${p.x},${p.z}`).join(' ')} fill={valid?'rgba(43,80,200,0.07)':'rgba(178,58,42,0.1)'}/>}
+            {closed&&n>=3&&<polygon points={points.map(p=>`${p.x},${p.z}`).join(' ')} fill={valid?'rgba(0,102,255,0.07)':'rgba(255,66,66,0.10)'}/>}
             {segs.map(w=><line key={w.i} x1={w.a.x} y1={w.a.z} x2={w.b.x} y2={w.b.z}
               stroke={!valid&&closed?PM_C.red:(selWall===w.i?PM_C.blue:PM_C.ink)} strokeWidth={selWall===w.i?0.07:0.05} strokeLinecap="round"/>)}
             {rubber&&<line x1={points[n-1].x} y1={points[n-1].z} x2={rubber.x} y2={rubber.z}
@@ -953,7 +958,7 @@ function PolygonMeasure({ onDone, onBack }){
               fill={rubberCross?PM_C.red:PM_C.blue} textAnchor="middle" style={{paintOrder:'stroke', stroke:PM_C.paper, strokeWidth:0.12}}>{_pmDist(points[n-1],rubber).toFixed(2)}</text>}
             {dimLabels.map(d=><text key={d.i} x={d.x} y={d.z+0.09} fontSize="0.28" fontFamily={mono} fontWeight="700" fill={PM_C.ink} textAnchor="middle"
               style={{paintOrder:'stroke', stroke:PM_C.paper, strokeWidth:0.12, pointerEvents:'none'}}>{d.len.toFixed(2)}</text>)}
-            {area!=null&&<text x={cen.x} y={cen.z} fontSize="0.44" fontFamily={mono} fontWeight="800" fill={PM_C.ink} textAnchor="middle"
+            {area!=null&&<text x={cen.x} y={cen.z} fontSize="0.44" fontFamily={mono} fontWeight="800" fill={PM_C.blue} textAnchor="middle"
               style={{paintOrder:'stroke', stroke:PM_C.paper, strokeWidth:0.16, pointerEvents:'none'}}>{area.toFixed(2)} ㎡</text>}
             {points.map((p,i)=>(
               <g key={i}>
@@ -966,24 +971,26 @@ function PolygonMeasure({ onDone, onBack }){
             {n===0&&<text x="5" y="3.5" fontSize="0.4" fontFamily="inherit" fill={PM_C.soft} textAnchor="middle">여기 격자를 탭해서 시작하세요</text>}
           </svg>
         </div>
-        <div style={{ background:PM_C.paper, borderTop:`1px solid ${PM_C.hair}`, padding:'10px 14px', display:'flex', flexWrap:'wrap', gap:8, alignItems:'center' }}>
-          <div style={{ fontFamily:mono, fontSize:12.5, display:'flex', gap:12 }}>
-            <span>측점 <b>{n}</b></span><span>둘레 <b>{perimeter.toFixed(2)}</b>m</span>
-            <span>면적 {area!=null?<b>{area.toFixed(2)}㎡ ({(area/PM_PYEONG).toFixed(1)}평)</b>:<span style={{color:PM_C.soft}}>—</span>}</span>
+        <div style={{ margin:'10px 16px 4px', background:'#fff', borderRadius:16, boxShadow:'var(--card)',
+          border:'1px solid rgba(17,24,39,.04)', padding:'10px 14px', display:'flex', flexWrap:'wrap', gap:8, alignItems:'center' }}>
+          <div style={{ fontSize:12.5, color:'var(--muted)', display:'flex', gap:12, fontWeight:500 }}>
+            <span>측점 <b style={{color:'var(--ink)'}}>{n}</b></span><span>둘레 <b style={{color:'var(--ink)'}}>{perimeter.toFixed(2)}</b>m</span>
+            <span>면적 {area!=null?<b style={{color:'var(--accent)'}}>{area.toFixed(2)}㎡ ({(area/PM_PYEONG).toFixed(1)}평)</b>:<span>—</span>}</span>
           </div>
           {closed&&!valid&&<span style={{fontSize:12, fontWeight:700, color:PM_C.red}}>벽이 교차해요 — 측점을 옮겨 수정하세요</span>}
           <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginLeft:'auto' }}>
-            <button onClick={()=>setAngleSnap(!angleSnap)} style={{...btn, background:angleSnap?PM_C.ink:'transparent', color:angleSnap?PM_C.paper:PM_C.ink}}>45° {angleSnap?'ON':'OFF'}</button>
+            <button onClick={()=>setAngleSnap(!angleSnap)} style={{...btn, background:angleSnap?'var(--accent)':'#fff', color:angleSnap?'#fff':'#374151',
+              boxShadow:angleSnap?'0 4px 12px rgba(0,102,255,.28)':btn.boxShadow, border:angleSnap?'1px solid transparent':btn.border}}>45° {angleSnap?'ON':'OFF'}</button>
             <button onClick={undo} disabled={n===0} style={{...btn, opacity:n===0?0.4:1}}>{closed?'다시 열기':'취소'}</button>
             {!closed&&n>=3&&<button onClick={()=>{ if(!_pmCrosses(points[n-1],points[0],points,[0,n-2])){setClosed(true);setHover(null);} }} style={{...btn, borderColor:PM_C.green, color:PM_C.green}}>닫기</button>}
             <button onClick={reset} style={btn}>처음부터</button>
           </div>
           {closed&&selWall!==null&&(
-            <div style={{ width:'100%', display:'flex', gap:8, alignItems:'center', fontFamily:mono, fontSize:12, borderTop:`1px solid ${PM_C.hair}`, paddingTop:8 }}>
-              <span style={{color:PM_C.blue, fontWeight:700}}>벽 P{selWall+1}–P{(selWall+1)%n+1}</span>
-              <span style={{color:PM_C.soft}}>실측</span>
+            <div style={{ width:'100%', display:'flex', gap:8, alignItems:'center', fontSize:12.5, borderTop:'1px solid '+PM_C.hair, paddingTop:8 }}>
+              <span style={{color:'var(--accent)', fontWeight:700}}>벽 P{selWall+1}–P{(selWall+1)%n+1}</span>
+              <span style={{color:'var(--muted)'}}>실측</span>
               <input type="number" step="0.01" min="0.1" inputMode="decimal" value={calib} onChange={e=>setCalib(e.target.value)}
-                style={{ width:72, fontFamily:mono, fontSize:12, padding:'5px 7px', border:'1px solid rgba(38,49,58,0.4)', borderRadius:5, background:PM_C.page, color:PM_C.ink }}/>
+                style={{ width:76, fontFamily:'inherit', fontSize:13, padding:'6px 9px', border:'1px solid rgba(17,24,39,0.12)', borderRadius:9, background:'#F2F2F7', color:'var(--ink)' }}/>
               <span>m</span>
               <button onClick={applyCalib} style={{...btn, borderColor:PM_C.blue, color:PM_C.blue}}>전체 보정</button>
             </div>
@@ -1004,7 +1011,7 @@ function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, 
     const xs=outline.map(p=>p[0]), zs=outline.map(p=>p[1]);
     const minX=Math.min(...xs), maxX=Math.max(...xs), minZ=Math.min(...zs), maxZ=Math.max(...zs);
     const Wm=maxX-minX, Dm=maxZ-minZ;
-    const scene=new THREE.Scene(); scene.background=new THREE.Color('#E7EAE3');
+    const scene=new THREE.Scene(); scene.background=new THREE.Color('#F2F2F7');
     const camera=new THREE.PerspectiveCamera(42, mount.clientWidth/Math.max(mount.clientHeight,1), 0.1, 100);
     const renderer=new THREE.WebGLRenderer({ antialias:true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
@@ -1014,7 +1021,7 @@ function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, 
     const el=renderer.domElement; el.style.touchAction='none'; el.style.display='block'; el.style.cursor='grab';
     const cx=(minX+maxX)/2, cz=(minZ+maxZ)/2, span=Math.max(Wm,Dm,2), target=new THREE.Vector3(cx,0,cz);
     const amb=new THREE.AmbientLight(0xffffff,0.9); scene.add(amb);
-    scene.add(new THREE.HemisphereLight(0xffffff,0xd8dcd2,0.3));
+    scene.add(new THREE.HemisphereLight(0xffffff,0xe6e9ef,0.3));
     const dir=new THREE.DirectionalLight(0xfff6e6,0.2); dir.position.set(cx+5,9,cz+3.5); dir.castShadow=true;
     dir.shadow.mapSize.set(1024,1024); dir.shadow.camera.left=-8; dir.shadow.camera.right=8; dir.shadow.camera.top=8; dir.shadow.camera.bottom=-8; dir.shadow.camera.near=0.5; dir.shadow.camera.far=30;
     dir.target.position.copy(target); scene.add(dir); scene.add(dir.target);
@@ -1022,13 +1029,13 @@ function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, 
     ground.rotation.x=-Math.PI/2; ground.position.set(cx,-0.005,cz); ground.receiveShadow=true; scene.add(ground);
     const shape=new THREE.Shape(outline.map(p=>new THREE.Vector2(p[0],p[1])));
     const floorGeo=new THREE.ShapeGeometry(shape); floorGeo.rotateX(Math.PI/2);
-    const floor=new THREE.Mesh(floorGeo, new THREE.MeshStandardMaterial({color:0xF0EFE8, roughness:1, side:THREE.DoubleSide}));
+    const floor=new THREE.Mesh(floorGeo, new THREE.MeshStandardMaterial({color:0xFFFFFF, roughness:1, side:THREE.DoubleSide}));
     floor.receiveShadow=true; scene.add(floor);
-    const gsz=Math.ceil(span)+2; const grid=new THREE.GridHelper(gsz, gsz, 0xB4BCB1, 0xC9D0C5);
+    const gsz=Math.ceil(span)+2; const grid=new THREE.GridHelper(gsz, gsz, 0xD7DEE8, 0xE9EEF4);
     grid.position.set(cx,0.01,cz); grid.material.transparent=true; grid.material.opacity=0.5; scene.add(grid);
     const wallH=2.4, wallT=0.1;
-    const wallMat=new THREE.MeshStandardMaterial({color:0xF8F8F3, roughness:0.95, side:THREE.DoubleSide, transparent:true, opacity:0.96});
-    const wallEdgeMat=new THREE.LineBasicMaterial({color:0x26313A, transparent:true, opacity:0.5});
+    const wallMat=new THREE.MeshStandardMaterial({color:0xFFFFFF, roughness:0.95, side:THREE.DoubleSide, transparent:true, opacity:0.96});
+    const wallEdgeMat=new THREE.LineBasicMaterial({color:0x111827, transparent:true, opacity:0.5});
     const walls=[];
     for(let i=0;i<outline.length;i++){
       const [x1,z1]=outline[i], [x2,z2]=outline[(i+1)%outline.length];
@@ -1047,11 +1054,11 @@ function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, 
       wall.scale.y=0.012; scene.add(wall); walls.push(wall);
     }
     if(door){ const dx0=door.x0, dz=door.z, dr=door.r;
-      const strip=new THREE.Mesh(new THREE.PlaneGeometry(door.x1-door.x0, wallT*2.2), new THREE.MeshBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.55, side:THREE.DoubleSide}));
+      const strip=new THREE.Mesh(new THREE.PlaneGeometry(door.x1-door.x0, wallT*2.2), new THREE.MeshBasicMaterial({color:0x0066FF, transparent:true, opacity:0.55, side:THREE.DoubleSide}));
       strip.rotation.x=-Math.PI/2; strip.position.set((door.x0+door.x1)/2,0.02,dz); scene.add(strip);
       const arcPts=[]; for(let t=0;t<=20;t++){ const a=(t/20)*(Math.PI/2); arcPts.push(new THREE.Vector3(dx0+Math.cos(a)*dr,0.02, dz-Math.sin(a)*dr)); }
       arcPts.push(new THREE.Vector3(dx0,0.02,dz));
-      scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(arcPts), new THREE.LineBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.5})));
+      scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(arcPts), new THREE.LineBasicMaterial({color:0x0066FF, transparent:true, opacity:0.5})));
     }
     const dimW=_dimSprite(Wm.toFixed(1)+' m'); dimW.position.set(cx,0.03,minZ-0.5); scene.add(dimW);
     const dimH=_dimSprite(Dm.toFixed(1)+' m'); dimH.position.set(minX-0.6,0.03,cz); scene.add(dimH);
@@ -1060,13 +1067,13 @@ function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, 
       const geo=new THREE.BoxGeometry(g.w/100, g.h/100, g.d/100); geo.translate(0,g.h/200,0);
       const m=new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:new THREE.Color(g.color), roughness:0.9, transparent:true, opacity:0.45}));
       m.position.set(g.cx/100,0,g.cz/100); m.castShadow=true; m.scale.y=0.012;
-      m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({color:0x26313A, transparent:true, opacity:0.25})));
+      m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({color:0x111827, transparent:true, opacity:0.25})));
       scene.add(m); ghostMeshes.push(m);
     });
     const sGeo=new THREE.BoxGeometry(sel.w/100, sel.h/100, sel.d/100); sGeo.translate(0,sel.h/200,0);
     const selMesh=new THREE.Mesh(sGeo, new THREE.MeshStandardMaterial({color:new THREE.Color(sel.color), roughness:0.85}));
     selMesh.castShadow=true; selMesh.position.set(selCx/100,0,selCz/100); selMesh.rotation.y=THREE.MathUtils.degToRad(selRot);
-    selMesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(sGeo), new THREE.LineBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.9})));
+    selMesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(sGeo), new THREE.LineBasicMaterial({color:0x0066FF, transparent:true, opacity:0.9})));
     scene.add(selMesh);
     const PLAN={theta:0,phi:0.06,radius:span*1.85}, V3D={theta:-0.7,phi:1.0,radius:span*1.55};
     const _init0=(mode==='plan')?PLAN:V3D;
@@ -1379,7 +1386,7 @@ function App() {
                 posX:clampedPos,posY:posYc,h:sel.h,effW,effD,gap:Math.round(gap)}],
               screen:'saved', shared:false }))} style={{flex:1}}>이 배치 저장</Btn>
         </div>}>
-        <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)', background:'#E7EAE3' }}>
+        <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)', background:'#F2F2F7' }}>
           <RoomViewer3D outline={roomPolyCm.map(([x,z])=>[x/100,z/100])}
             door={isPoly?null:{x0:(roomW-DOOR)/100, x1:roomW/100, z:roomD/100, r:DOOR/100}}
             sel={{ id:sel.id, w:sel.w, d:sel.d, h:sel.h, color:sel.fg }}
@@ -1391,39 +1398,44 @@ function App() {
             display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
             <div style={{ display:'flex', gap:8, alignItems:'center', minWidth:0 }}>
               <button onClick={()=>go('catalog')} aria-label="뒤로" style={{ flexShrink:0, cursor:'pointer',
-                border:'1px solid rgba(38,49,58,0.25)', background:'rgba(247,247,242,0.92)', color:'#26313A',
+                border:'1px solid rgba(17,24,39,0.08)', background:'rgba(255,255,255,0.94)', color:'var(--ink)',
+                backdropFilter:'blur(8px)', boxShadow:'0 2px 10px rgba(16,24,40,.08)',
                 borderRadius:99, width:34, height:34, fontSize:17, fontWeight:800, fontFamily:'inherit',
                 display:'flex', alignItems:'center', justifyContent:'center', lineHeight:1 }}>←</button>
-              <div style={{ display:'flex', gap:8, alignItems:'center', minWidth:0, background:'rgba(247,247,242,0.92)',
-                border:'1px solid rgba(38,49,58,0.25)', borderRadius:99, padding:'7px 12px' }}>
+              <div style={{ display:'flex', gap:8, alignItems:'center', minWidth:0, background:'rgba(255,255,255,0.94)',
+                border:'1px solid rgba(17,24,39,0.08)', backdropFilter:'blur(8px)', boxShadow:'0 2px 10px rgba(16,24,40,.08)',
+                borderRadius:99, padding:'7px 12px' }}>
                 <span style={{width:9,height:9,borderRadius:2,background:sel.fg,flexShrink:0}} />
-                <Type v="body2" weight="bold" color="#26313A" style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{sel.name} · {effW}×{effD}cm</Type>
+                <Type v="body2" weight="bold" style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{sel.name} · {effW}×{effD}cm</Type>
               </div>
             </div>
-            <div style={{ display:'flex', background:'#DDE1D9', border:'1px solid rgba(38,49,58,0.25)', borderRadius:9, padding:3, flexShrink:0 }}>
+            <div style={{ display:'flex', background:'rgba(255,255,255,0.94)', border:'1px solid rgba(17,24,39,0.08)',
+              backdropFilter:'blur(8px)', boxShadow:'0 2px 10px rgba(16,24,40,.08)', borderRadius:99, padding:3, flexShrink:0 }}>
               {[['plan','도식'],['3d','3D']].map(([k,l])=>(
-                <button key={k} onClick={()=>S({viewMode:k})} style={{ border:'none', cursor:'pointer', borderRadius:7,
-                  padding:'6px 13px', fontSize:13, fontWeight:700, fontFamily:'inherit',
-                  background: st.viewMode===k?'#26313A':'transparent', color: st.viewMode===k?'#F0EFE8':'#26313A' }}>{l}</button>
+                <button key={k} onClick={()=>S({viewMode:k})} style={{ border:'none', cursor:'pointer', borderRadius:99,
+                  padding:'6px 14px', fontSize:13, fontWeight:700, fontFamily:'inherit', transition:'background .18s, color .18s',
+                  background: st.viewMode===k?'var(--accent)':'transparent', color: st.viewMode===k?'#fff':'#374151' }}>{l}</button>
               ))}
             </div>
           </div>
           {/* usage hint */}
-          <div style={{ position:'absolute', bottom:78, right:12, zIndex:6, fontSize:10, color:'#5C6A66',
-            fontFamily:'ui-monospace, Menlo, monospace', textAlign:'right', lineHeight:1.6,
-            background:'rgba(247,247,242,0.82)', border:'1px solid rgba(38,49,58,0.15)', padding:'5px 8px', borderRadius:6 }}>
+          <div style={{ position:'absolute', bottom:78, right:12, zIndex:6, fontSize:11, color:'var(--muted)',
+            textAlign:'right', lineHeight:1.6, backdropFilter:'blur(6px)',
+            background:'rgba(255,255,255,0.88)', border:'1px solid rgba(17,24,39,0.08)', padding:'5px 9px', borderRadius:9,
+            boxShadow:'0 2px 8px rgba(16,24,40,.06)' }}>
             가구 드래그 = 이동<br/>{st.viewMode==='3d'?'빈 곳 드래그 = 시점 회전':'스크롤 = 확대·축소'}
           </div>
           {/* verdict */}
           <div style={{ position:'absolute', bottom:12, left:12, right:12, zIndex:6,
-            display:'flex', gap:11, alignItems:'center', background:'rgba(247,247,242,0.97)', backdropFilter:'blur(8px)',
-            border:'1px solid '+(fits?'rgba(94,125,98,0.6)':'rgba(178,58,42,0.6)'), borderRadius:14, padding:'11px 13px',
-            boxShadow:'0 10px 30px rgba(16,24,40,.18)', transition:'border-color .2s' }}>
-            <div style={{ width:26, height:26, borderRadius:'50%', flexShrink:0, background:fits?'#5E7D62':'#B23A2A',
-              color:'#fff', fontWeight:800, fontSize:15, display:'flex', alignItems:'center', justifyContent:'center' }}>{fits?'✓':'!'}</div>
+            display:'flex', gap:11, alignItems:'center', background:'rgba(255,255,255,0.97)', backdropFilter:'blur(8px)',
+            border:'1px solid '+(fits?'rgba(0,191,64,0.45)':'rgba(255,66,66,0.45)'), borderRadius:14, padding:'11px 13px',
+            boxShadow:'0 10px 30px rgba(16,24,40,.16)', transition:'border-color .2s' }}>
+            <div style={{ width:26, height:26, borderRadius:'50%', flexShrink:0, background:fits?'var(--pos)':'var(--neg)',
+              color:'#fff', fontWeight:800, fontSize:15, display:'flex', alignItems:'center', justifyContent:'center',
+              boxShadow:fits?'0 3px 8px rgba(0,191,64,.35)':'0 3px 8px rgba(255,66,66,.35)' }}>{fits?'✓':'!'}</div>
             <div>
-              <Type v="body2" weight="bold" color="#26313A">{verdictTitle}</Type>
-              <Type v="caption" color="#5C6A66" style={{marginTop:1}}>{verdictBody}</Type>
+              <Type v="body2" weight="bold">{verdictTitle}</Type>
+              <Type v="caption" color="var(--muted)" style={{marginTop:1}}>{verdictBody}</Type>
             </div>
           </div>
         </div>
