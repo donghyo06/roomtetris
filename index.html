@@ -1453,18 +1453,33 @@ function App() {
           ) : (
             <Fragment>
               <div style={{ background:'#fff', borderRadius:18, padding:20, display:'flex', justifyContent:'center', marginBottom:16 }}>
-                <div style={{ position:'relative', width:planW, height:planH, background:'rgba(0,0,0,0.03)',
-                  border:'2px solid var(--accent)', borderRadius:6 }}>
-                  <div style={{ position:'absolute', right:0, bottom:0, width:DOOR/roomW*100+'%', height:DOOR/roomD*100+'%',
-                    background:'repeating-linear-gradient(45deg,rgba(255,146,0,0.15) 0 6px,transparent 6px 12px)' }} />
-                  {placements.map(p=>(
-                    <div key={p.key} style={{ position:'absolute', left:(p.posX/roomW*100)+'%', top:((p.posY??0)/roomD*100)+'%',
-                      width:(p.effW/roomW*100)+'%', height:(p.effD/roomD*100)+'%', background:`color-mix(in srgb, ${p.fg} 14%, white)`,
-                      border:'1.5px solid '+p.fg, borderRadius:3, display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
-                      <span style={{fontSize:9,fontWeight:700,color:p.fg,padding:2,textAlign:'center'}}>{p.name}</span>
-                    </div>
-                  ))}
-                </div>
+                {isPoly ? (
+                  <svg viewBox={`-12 -12 ${roomW+24} ${roomD+24}`} style={{ width:'100%', maxWidth:300, aspectRatio:`${roomW+24} / ${roomD+24}` }}>
+                    <polygon points={roomPolyCm.map(p=>p.join(',')).join(' ')}
+                      fill="rgba(0,102,255,0.05)" stroke="var(--accent)" strokeWidth="4" strokeLinejoin="round"/>
+                    {placements.map(p=>(
+                      <g key={p.key}>
+                        <rect x={p.posX} y={p.posY??0} width={p.effW} height={p.effD} rx="4"
+                          fill={`color-mix(in srgb, ${p.fg} 16%, white)`} stroke={p.fg} strokeWidth="3"/>
+                        <text x={p.posX+p.effW/2} y={(p.posY??0)+p.effD/2} fill={p.fg}
+                          fontSize={Math.max(12, Math.round(roomW/26))} fontWeight="700" textAnchor="middle" dominantBaseline="central">{p.name}</text>
+                      </g>
+                    ))}
+                  </svg>
+                ) : (
+                  <div style={{ position:'relative', width:planW, height:planH, background:'rgba(0,0,0,0.03)',
+                    border:'2px solid var(--accent)', borderRadius:6 }}>
+                    <div style={{ position:'absolute', right:0, bottom:0, width:DOOR/roomW*100+'%', height:DOOR/roomD*100+'%',
+                      background:'repeating-linear-gradient(45deg,rgba(255,146,0,0.15) 0 6px,transparent 6px 12px)' }} />
+                    {placements.map(p=>(
+                      <div key={p.key} style={{ position:'absolute', left:(p.posX/roomW*100)+'%', top:((p.posY??0)/roomD*100)+'%',
+                        width:(p.effW/roomW*100)+'%', height:(p.effD/roomD*100)+'%', background:`color-mix(in srgb, ${p.fg} 14%, white)`,
+                        border:'1.5px solid '+p.fg, borderRadius:3, display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden' }}>
+                        <span style={{fontSize:9,fontWeight:700,color:p.fg,padding:2,textAlign:'center'}}>{p.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
                 {placements.map(p=>(
