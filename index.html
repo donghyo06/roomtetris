@@ -660,14 +660,172 @@ function _dimSprite(text){
   const sp=new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false }));
   sp.scale.set(1.5,0.375,1); sp.renderOrder=10; return sp;
 }
-function RoomViewer3D({ roomW, roomD, doorMM, sel, selCx, selCz, selRot, fits, ghosts, mode, onDrag }){
+/* ─── polygon geometry helpers ─── */
+function _pointInPoly(px, pz, poly){ // poly: [[x,z],...]
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i][0], zi=poly[i][1], xj=poly[j][0], zj=poly[j][1];
+    if(((zi>pz)!==(zj>pz)) && (px < (xj-xi)*(pz-zi)/((zj-zi)||1e-9)+xi)) inside=!inside;
+  }
+  return inside;
+}
+const _pmDist=(a,b)=>Math.hypot(b.x-a.x, b.z-a.z);
+function _pmShoelace(pts){ let s=0; for(let i=0;i<pts.length;i++){ const p=pts[i], q=pts[(i+1)%pts.length]; s+=p.x*q.z-q.x*p.z; } return Math.abs(s)/2; }
+function _pmCentroid(pts){ if(!pts.length) return {x:5,z:3.5}; const c=pts.reduce((a,p)=>({x:a.x+p.x,z:a.z+p.z}),{x:0,z:0}); return {x:c.x/pts.length, z:c.z/pts.length}; }
+function _pmSegX(p1,p2,p3,p4){ const d=(p2.x-p1.x)*(p4.z-p3.z)-(p2.z-p1.z)*(p4.x-p3.x); if(Math.abs(d)<1e-12) return false;
+  const t=((p3.x-p1.x)*(p4.z-p3.z)-(p3.z-p1.z)*(p4.x-p3.x))/d, u=((p3.x-p1.x)*(p2.z-p1.z)-(p3.z-p1.z)*(p2.x-p1.x))/d;
+  return t>1e-9&&t<1-1e-9&&u>1e-9&&u<1-1e-9; }
+function _pmSimple(pts){ const n=pts.length; if(n<3) return false;
+  for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){ if(j===(i+1)%n||(j+1)%n===i) continue;
+    if(_pmSegX(pts[i],pts[(i+1)%n],pts[j],pts[(j+1)%n])) return false; } return true; }
+function _pmCrosses(a,b,pts,skip){ for(let i=0;i<pts.length-1;i++){ if(skip.includes(i)) continue; if(_pmSegX(a,b,pts[i],pts[i+1])) return true; } return false; }
+const _pmClampW=(p)=>({ x:Math.min(10,Math.max(0,p.x)), z:Math.min(7,Math.max(0,p.z)) });
+function _pmSnap(raw, prev, on){ let p={x:Math.round(raw.x/0.1)*0.1, z:Math.round(raw.z/0.1)*0.1};
+  if(on&&prev){ const dx=raw.x-prev.x, dz=raw.z-prev.z, len=Math.hypot(dx,dz);
+    if(len>0.05){ const sa=Math.round(Math.atan2(dz,dx)/(Math.PI/4))*(Math.PI/4), sl=Math.max(0.1,Math.round(len/0.05)*0.05);
+      p={x:Math.round((prev.x+Math.cos(sa)*sl)*100)/100, z:Math.round((prev.z+Math.sin(sa)*sl)*100)/100}; } }
+  return p; }
+const PM_PYEONG=3.305785, PM_C={ page:'#E7EAE3', paper:'#F0EFE8', ink:'#26313A', soft:'#5C6A66', hair:'rgba(38,49,58,0.22)', blue:'#2B50C8', red:'#B23A2A', green:'#5E7D62' };
+
+/* ─── polygon room measurement (tap points → outline, area, calibration) ─── */
+function PolygonMeasure({ onDone, onBack }){
+  const [points,setPoints]=useState([]);
+  const [closed,setClosed]=useState(false);
+  const [angleSnap,setAngleSnap]=useState(true);
+  const [hover,setHover]=useState(null);
+  const [dragIdx,setDragIdx]=useState(null);
+  const [selWall,setSelWall]=useState(null);
+  const [calib,setCalib]=useState('');
+  const svgRef=useRef(null);
+  const n=points.length;
+  const valid=closed?_pmSimple(points):true;
+  const wallCount=closed?n:Math.max(0,n-1);
+  const segs=[]; for(let i=0;i<wallCount;i++) segs.push({i,a:points[i],b:points[(i+1)%n]});
+  const perimeter=segs.reduce((s,w)=>s+_pmDist(w.a,w.b),0);
+  const area=closed&&valid&&n>=3?_pmShoelace(points):null;
+  const cen=_pmCentroid(points);
+  let rubber=null, rubberClose=false, rubberCross=false;
+  if(!closed&&hover&&n>0&&dragIdx===null){ const last=points[n-1];
+    if(n>=3&&_pmDist(hover,points[0])<0.32){ rubber=points[0]; rubberClose=true; rubberCross=_pmCrosses(last,points[0],points,[0,n-2]); }
+    else { rubber=_pmSnap(_pmClampW(hover),last,angleSnap); rubberCross=_pmCrosses(last,rubber,points,[n-2]); } }
+  const getPt=(e)=>{ const svg=svgRef.current; if(!svg) return null; const pt=svg.createSVGPoint(); pt.x=e.clientX; pt.y=e.clientY;
+    const m=svg.getScreenCTM(); if(!m) return null; const p=pt.matrixTransform(m.inverse()); return {x:p.x,z:p.y}; };
+  const hitMarker=(p)=>{ for(let i=points.length-1;i>=0;i--) if(_pmDist(p,points[i])<0.28) return i; return -1; };
+  const onDown=(e)=>{ const raw=getPt(e); if(!raw) return; const mi=hitMarker(raw);
+    if(mi>=0){ if(!closed&&mi===0&&n>=3){ if(!_pmCrosses(points[n-1],points[0],points,[0,n-2])){ setClosed(true); setHover(null); } return; }
+      setDragIdx(mi); setSelWall(null); try{svgRef.current.setPointerCapture(e.pointerId);}catch(_){} return; }
+    if(closed){ let best=-1, bd=0.25; for(let i=0;i<n;i++){ const d=_distToSeg(raw,points[i],points[(i+1)%n]); if(d<bd){bd=d;best=i;} }
+      setSelWall(best>=0?best:null); if(best>=0) setCalib(_pmDist(points[best],points[(best+1)%n]).toFixed(2)); return; }
+    const prev=n>0?points[n-1]:null; const p=_pmSnap(_pmClampW(raw),prev,angleSnap);
+    if(prev&&_pmDist(p,prev)<0.05) return; if(prev&&_pmCrosses(prev,p,points,[n-2])) return; setPoints([...points,p]); };
+  function _distToSeg(p,a,b){ const abx=b.x-a.x, abz=b.z-a.z, l2=abx*abx+abz*abz||1;
+    const t=Math.max(0,Math.min(1,((p.x-a.x)*abx+(p.z-a.z)*abz)/l2)); return Math.hypot(p.x-(a.x+abx*t), p.z-(a.z+abz*t)); }
+  const onMove=(e)=>{ const raw=getPt(e); if(!raw) return;
+    if(dragIdx!==null){ const p=_pmClampW({x:Math.round(raw.x/0.05)*0.05, z:Math.round(raw.z/0.05)*0.05});
+      setPoints(pts=>pts.map((q,i)=>i===dragIdx?p:q)); return; }
+    if(!closed) setHover(raw); };
+  const onUp=()=>setDragIdx(null);
+  const undo=()=>{ if(closed){ setClosed(false); setSelWall(null); return; } if(n>0) setPoints(points.slice(0,-1)); };
+  const reset=()=>{ setPoints([]); setClosed(false); setSelWall(null); setHover(null); };
+  const loadEx=()=>{ setPoints([{x:1,z:1},{x:6.2,z:1},{x:6.2,z:4},{x:4.6,z:4},{x:4.6,z:5.4},{x:1,z:5.4}]); setClosed(true); setSelWall(null); setHover(null); };
+  const applyCalib=()=>{ const v=parseFloat(calib); if(!(v>0)||selWall===null||n<2) return;
+    const cur=_pmDist(points[selWall],points[(selWall+1)%n]); if(cur<1e-6) return; const f=Math.min(5,Math.max(0.2,v/cur));
+    setPoints(pts=>pts.map(p=>({x:Math.round((cen.x+(p.x-cen.x)*f)*1000)/1000, z:Math.round((cen.z+(p.z-cen.z)*f)*1000)/1000}))); };
+  const finish=()=>{ if(!(closed&&valid&&n>=3)) return;
+    const xs=points.map(p=>p.x), zs=points.map(p=>p.z); const minX=Math.min(...xs), minZ=Math.min(...zs);
+    const outlineCm=points.map(p=>[Math.round((p.x-minX)*100), Math.round((p.z-minZ)*100)]);
+    const bboxW=Math.round((Math.max(...xs)-minX)*100), bboxD=Math.round((Math.max(...zs)-minZ)*100);
+    onDone(outlineCm, bboxW, bboxD); };
+  const dimLabels=segs.map(w=>{ const mx=(w.a.x+w.b.x)/2, mz=(w.a.z+w.b.z)/2, len=_pmDist(w.a,w.b);
+    let nx=-(w.b.z-w.a.z)/(len||1), nz=(w.b.x-w.a.x)/(len||1);
+    if(Math.hypot(mx+nx*0.1-cen.x,mz+nz*0.1-cen.z)<Math.hypot(mx-cen.x,mz-cen.z)){ nx=-nx; nz=-nz; }
+    return {i:w.i, x:mx+nx*0.34, z:mz+nz*0.34, len}; });
+  const mono='ui-monospace, Menlo, Consolas, monospace';
+  const btn={ fontFamily:'inherit', fontSize:12, fontWeight:600, cursor:'pointer', background:'transparent', color:PM_C.ink,
+    border:'1px solid rgba(38,49,58,0.4)', borderRadius:6, padding:'6px 10px' };
+  return (
+    <Device footer={
+      <div style={{display:'flex', gap:10}}>
+        <Btn variant="outlined" full={false} onClick={onBack} style={{padding:'14px 16px'}}>뒤로</Btn>
+        <Btn disabled={!(closed&&valid&&n>=3)} onClick={finish} style={{flex:1}}>이 방으로 시작{area!=null?` · ${area.toFixed(1)}㎡`:''}</Btn>
+      </div>}>
+      <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)', background:PM_C.page,
+        display:'flex', flexDirection:'column' }}>
+        <div style={{ padding:'6px 16px 4px' }}>
+          <button onClick={onBack} style={{ border:'none', background:'none', cursor:'pointer', padding:0, color:PM_C.blue, fontWeight:700, fontSize:14 }}>← 뒤로</button>
+          <div style={{ fontSize:18, fontWeight:800, color:PM_C.ink, marginTop:2 }}>다각형 방 측정</div>
+          <div style={{ fontSize:12.5, color:PM_C.soft, marginTop:1 }}>격자를 탭해 방 모서리마다 측점을 찍고, 첫 점을 다시 탭하면 닫혀요.</div>
+        </div>
+        <div style={{ flex:1, position:'relative', minHeight:0 }}>
+          <svg ref={svgRef} viewBox="-0.7 -0.7 11.4 8.4"
+            style={{ position:'absolute', inset:0, width:'100%', height:'100%', touchAction:'none', cursor:closed?'default':'crosshair' }}
+            onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onPointerLeave={()=>setHover(null)}>
+            <defs><pattern id="pmg" width="1" height="1" patternUnits="userSpaceOnUse">
+              <path d="M 0.5 0 V 1 M 0 0.5 H 1" stroke="#C9D0C5" strokeWidth="0.015" fill="none"/>
+              <path d="M 1 0 V 1 M 0 1 H 1" stroke="#B4BCB1" strokeWidth="0.02" fill="none"/></pattern></defs>
+            <rect x="0" y="0" width="10" height="7" fill={PM_C.paper} stroke={PM_C.hair} strokeWidth="0.03"/>
+            <rect x="0" y="0" width="10" height="7" fill="url(#pmg)"/>
+            {closed&&n>=3&&<polygon points={points.map(p=>`${p.x},${p.z}`).join(' ')} fill={valid?'rgba(43,80,200,0.07)':'rgba(178,58,42,0.1)'}/>}
+            {segs.map(w=><line key={w.i} x1={w.a.x} y1={w.a.z} x2={w.b.x} y2={w.b.z}
+              stroke={!valid&&closed?PM_C.red:(selWall===w.i?PM_C.blue:PM_C.ink)} strokeWidth={selWall===w.i?0.07:0.05} strokeLinecap="round"/>)}
+            {rubber&&<line x1={points[n-1].x} y1={points[n-1].z} x2={rubber.x} y2={rubber.z}
+              stroke={rubberCross?PM_C.red:(rubberClose?PM_C.green:PM_C.blue)} strokeWidth="0.045" strokeDasharray="0.14 0.1" strokeLinecap="round"/>}
+            {rubber&&!rubberClose&&<text x={(points[n-1].x+rubber.x)/2} y={(points[n-1].z+rubber.z)/2-0.18} fontSize="0.28" fontFamily={mono} fontWeight="700"
+              fill={rubberCross?PM_C.red:PM_C.blue} textAnchor="middle" style={{paintOrder:'stroke', stroke:PM_C.paper, strokeWidth:0.12}}>{_pmDist(points[n-1],rubber).toFixed(2)}</text>}
+            {dimLabels.map(d=><text key={d.i} x={d.x} y={d.z+0.09} fontSize="0.28" fontFamily={mono} fontWeight="700" fill={PM_C.ink} textAnchor="middle"
+              style={{paintOrder:'stroke', stroke:PM_C.paper, strokeWidth:0.12, pointerEvents:'none'}}>{d.len.toFixed(2)}</text>)}
+            {area!=null&&<text x={cen.x} y={cen.z} fontSize="0.44" fontFamily={mono} fontWeight="800" fill={PM_C.ink} textAnchor="middle"
+              style={{paintOrder:'stroke', stroke:PM_C.paper, strokeWidth:0.16, pointerEvents:'none'}}>{area.toFixed(2)} ㎡</text>}
+            {points.map((p,i)=>(
+              <g key={i}>
+                {i===0&&!closed&&n>=3&&<circle cx={p.x} cy={p.z} fill="none" stroke={PM_C.green} strokeWidth="0.03">
+                  <animate attributeName="r" values="0.2;0.36;0.2" dur="1.6s" repeatCount="indefinite"/>
+                  <animate attributeName="opacity" values="0.9;0.2;0.9" dur="1.6s" repeatCount="indefinite"/></circle>}
+                <circle cx={p.x} cy={p.z} r="0.13" fill={PM_C.paper} stroke={i===0?PM_C.blue:PM_C.ink} strokeWidth="0.045"/>
+              </g>
+            ))}
+            {n===0&&<text x="5" y="3.5" fontSize="0.4" fontFamily="inherit" fill={PM_C.soft} textAnchor="middle">여기 격자를 탭해서 시작하세요</text>}
+          </svg>
+        </div>
+        <div style={{ background:PM_C.paper, borderTop:`1px solid ${PM_C.hair}`, padding:'10px 14px', display:'flex', flexWrap:'wrap', gap:8, alignItems:'center' }}>
+          <div style={{ fontFamily:mono, fontSize:12.5, display:'flex', gap:12 }}>
+            <span>측점 <b>{n}</b></span><span>둘레 <b>{perimeter.toFixed(2)}</b>m</span>
+            <span>면적 {area!=null?<b>{area.toFixed(2)}㎡ ({(area/PM_PYEONG).toFixed(1)}평)</b>:<span style={{color:PM_C.soft}}>—</span>}</span>
+          </div>
+          {closed&&!valid&&<span style={{fontSize:12, fontWeight:700, color:PM_C.red}}>벽이 교차해요 — 측점을 옮겨 수정하세요</span>}
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginLeft:'auto' }}>
+            <button onClick={()=>setAngleSnap(!angleSnap)} style={{...btn, background:angleSnap?PM_C.ink:'transparent', color:angleSnap?PM_C.paper:PM_C.ink}}>45° {angleSnap?'ON':'OFF'}</button>
+            <button onClick={undo} disabled={n===0} style={{...btn, opacity:n===0?0.4:1}}>{closed?'다시 열기':'취소'}</button>
+            {!closed&&n>=3&&<button onClick={()=>{ if(!_pmCrosses(points[n-1],points[0],points,[0,n-2])){setClosed(true);setHover(null);} }} style={{...btn, borderColor:PM_C.green, color:PM_C.green}}>닫기</button>}
+            <button onClick={loadEx} style={btn}>예시</button>
+            <button onClick={reset} style={btn}>처음부터</button>
+          </div>
+          {closed&&selWall!==null&&(
+            <div style={{ width:'100%', display:'flex', gap:8, alignItems:'center', fontFamily:mono, fontSize:12, borderTop:`1px solid ${PM_C.hair}`, paddingTop:8 }}>
+              <span style={{color:PM_C.blue, fontWeight:700}}>벽 P{selWall+1}–P{(selWall+1)%n+1}</span>
+              <span style={{color:PM_C.soft}}>실측</span>
+              <input type="number" step="0.01" min="0.1" inputMode="decimal" value={calib} onChange={e=>setCalib(e.target.value)}
+                style={{ width:72, fontFamily:mono, fontSize:12, padding:'5px 7px', border:'1px solid rgba(38,49,58,0.4)', borderRadius:5, background:PM_C.page, color:PM_C.ink }}/>
+              <span>m</span>
+              <button onClick={applyCalib} style={{...btn, borderColor:PM_C.blue, color:PM_C.blue}}>전체 보정</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </Device>
+  );
+}
+
+function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, mode, onDrag }){
   const mountRef = useRef(null);
   const stateRef = useRef({});
   stateRef.current = { selCx, selCz, selRot, fits, mode, onDrag, sel };
   useEffect(()=>{
     if(typeof THREE==='undefined' || !mountRef.current) return;
     const mount=mountRef.current;
-    const Wm=roomW/100, Dm=roomD/100, doorM=doorMM/100;
+    const xs=outline.map(p=>p[0]), zs=outline.map(p=>p[1]);
+    const minX=Math.min(...xs), maxX=Math.max(...xs), minZ=Math.min(...zs), maxZ=Math.max(...zs);
+    const Wm=maxX-minX, Dm=maxZ-minZ;
     const scene=new THREE.Scene(); scene.background=new THREE.Color('#E7EAE3');
     const camera=new THREE.PerspectiveCamera(42, mount.clientWidth/Math.max(mount.clientHeight,1), 0.1, 100);
     const renderer=new THREE.WebGLRenderer({ antialias:true });
@@ -676,7 +834,7 @@ function RoomViewer3D({ roomW, roomD, doorMM, sel, selCx, selCz, selRot, fits, g
     renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
     mount.appendChild(renderer.domElement);
     const el=renderer.domElement; el.style.touchAction='none'; el.style.display='block'; el.style.cursor='grab';
-    const cx=Wm/2, cz=Dm/2, span=Math.max(Wm,Dm), target=new THREE.Vector3(cx,0,cz);
+    const cx=(minX+maxX)/2, cz=(minZ+maxZ)/2, span=Math.max(Wm,Dm,2), target=new THREE.Vector3(cx,0,cz);
     const amb=new THREE.AmbientLight(0xffffff,0.9); scene.add(amb);
     scene.add(new THREE.HemisphereLight(0xffffff,0xd8dcd2,0.3));
     const dir=new THREE.DirectionalLight(0xfff6e6,0.2); dir.position.set(cx+5,9,cz+3.5); dir.castShadow=true;
@@ -684,11 +842,13 @@ function RoomViewer3D({ roomW, roomD, doorMM, sel, selCx, selCz, selRot, fits, g
     dir.target.position.copy(target); scene.add(dir); scene.add(dir.target);
     const ground=new THREE.Mesh(new THREE.PlaneGeometry(40,40), new THREE.ShadowMaterial({opacity:0.16}));
     ground.rotation.x=-Math.PI/2; ground.position.set(cx,-0.005,cz); ground.receiveShadow=true; scene.add(ground);
-    const floor=new THREE.Mesh(new THREE.PlaneGeometry(Wm,Dm), new THREE.MeshStandardMaterial({color:0xF0EFE8, roughness:1, side:THREE.DoubleSide}));
-    floor.rotation.x=-Math.PI/2; floor.position.set(cx,0,cz); floor.receiveShadow=true; scene.add(floor);
+    const shape=new THREE.Shape(outline.map(p=>new THREE.Vector2(p[0],p[1])));
+    const floorGeo=new THREE.ShapeGeometry(shape); floorGeo.rotateX(Math.PI/2);
+    const floor=new THREE.Mesh(floorGeo, new THREE.MeshStandardMaterial({color:0xF0EFE8, roughness:1, side:THREE.DoubleSide}));
+    floor.receiveShadow=true; scene.add(floor);
     const gsz=Math.ceil(span)+2; const grid=new THREE.GridHelper(gsz, gsz, 0xB4BCB1, 0xC9D0C5);
     grid.position.set(cx,0.01,cz); grid.material.transparent=true; grid.material.opacity=0.5; scene.add(grid);
-    const outline=[[0,0],[Wm,0],[Wm,Dm],[0,Dm]]; const wallH=2.4, wallT=0.1;
+    const wallH=2.4, wallT=0.1;
     const wallMat=new THREE.MeshStandardMaterial({color:0xF8F8F3, roughness:0.95, side:THREE.DoubleSide, transparent:true, opacity:0.96});
     const wallEdgeMat=new THREE.LineBasicMaterial({color:0x26313A, transparent:true, opacity:0.5});
     const walls=[];
@@ -701,15 +861,15 @@ function RoomViewer3D({ roomW, roomD, doorMM, sel, selCx, selCz, selRot, fits, g
       wall.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), wallEdgeMat));
       wall.userData.lerp=0.06+i*0.013; wall.scale.y=0.012; scene.add(wall); walls.push(wall);
     }
-    // door on front wall (z=Dm), right side
-    const dx0=Math.max(0,Wm-doorM);
-    const strip=new THREE.Mesh(new THREE.PlaneGeometry(Math.min(doorM,Wm), wallT*2.2), new THREE.MeshBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.55, side:THREE.DoubleSide}));
-    strip.rotation.x=-Math.PI/2; strip.position.set((dx0+Wm)/2,0.02,Dm); scene.add(strip);
-    const arcPts=[]; for(let t=0;t<=20;t++){ const a=(t/20)*(Math.PI/2); arcPts.push(new THREE.Vector3(dx0+Math.cos(a)*doorM,0.02, Dm-Math.sin(a)*doorM)); }
-    arcPts.push(new THREE.Vector3(dx0,0.02,Dm));
-    scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(arcPts), new THREE.LineBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.5})));
-    const dimW=_dimSprite(Wm.toFixed(1)+' m'); dimW.position.set(cx,0.03,-0.5); scene.add(dimW);
-    const dimH=_dimSprite(Dm.toFixed(1)+' m'); dimH.position.set(-0.6,0.03,cz); scene.add(dimH);
+    if(door){ const dx0=door.x0, dz=door.z, dr=door.r;
+      const strip=new THREE.Mesh(new THREE.PlaneGeometry(door.x1-door.x0, wallT*2.2), new THREE.MeshBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.55, side:THREE.DoubleSide}));
+      strip.rotation.x=-Math.PI/2; strip.position.set((door.x0+door.x1)/2,0.02,dz); scene.add(strip);
+      const arcPts=[]; for(let t=0;t<=20;t++){ const a=(t/20)*(Math.PI/2); arcPts.push(new THREE.Vector3(dx0+Math.cos(a)*dr,0.02, dz-Math.sin(a)*dr)); }
+      arcPts.push(new THREE.Vector3(dx0,0.02,dz));
+      scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(arcPts), new THREE.LineBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.5})));
+    }
+    const dimW=_dimSprite(Wm.toFixed(1)+' m'); dimW.position.set(cx,0.03,minZ-0.5); scene.add(dimW);
+    const dimH=_dimSprite(Dm.toFixed(1)+' m'); dimH.position.set(minX-0.6,0.03,cz); scene.add(dimH);
     const ghostMeshes=[];
     (ghosts||[]).forEach(g=>{
       const geo=new THREE.BoxGeometry(g.w/100, g.h/100, g.d/100); geo.translate(0,g.h/200,0);
@@ -729,7 +889,7 @@ function RoomViewer3D({ roomW, roomD, doorMM, sel, selCx, selCz, selRot, fits, g
     let dragging=false, dragOff={x:0,z:0}, orbiting=false, lastX=0, lastY=0;
     const setNDC=e=>{ const r=el.getBoundingClientRect(); ndc.x=((e.clientX-r.left)/r.width)*2-1; ndc.y=-((e.clientY-r.top)/r.height)*2+1; };
     const clamp=(x,z)=>{ const rr=(stateRef.current.selRot%180)!==0; const ew=(rr?sel.d:sel.w)/100, ed=(rr?sel.w:sel.d)/100;
-      return { x:Math.min(Wm-ew/2, Math.max(ew/2,x)), z:Math.min(Dm-ed/2, Math.max(ed/2,z)) }; };
+      return { x:Math.min(maxX-ew/2, Math.max(minX+ew/2,x)), z:Math.min(maxZ-ed/2, Math.max(minZ+ed/2,z)) }; };
     const onDown=e=>{ setNDC(e); ray.setFromCamera(ndc,camera); const h=ray.intersectObject(selMesh,true);
       if(h.length>0){ dragging=true; if(ray.ray.intersectPlane(fp,hit)) dragOff={x:selMesh.position.x-hit.x, z:selMesh.position.z-hit.z}; el.style.cursor='grabbing'; }
       else if(stateRef.current.mode==='3d'){ orbiting=true; el.style.cursor='grabbing'; }
@@ -761,14 +921,14 @@ function RoomViewer3D({ roomW, roomD, doorMM, sel, selCx, selCz, selRot, fits, g
       scene.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material){ if(o.material.map)o.material.map.dispose(); o.material.dispose(); } });
       if(el.parentNode===mount) mount.removeChild(el); renderer.dispose();
     };
-  }, [roomW, roomD, doorMM, (ghosts||[]).map(g=>g.key).join(','), sel && sel.id]);
+  }, [JSON.stringify(outline), !!door, (ghosts||[]).map(g=>g.key).join(','), sel && sel.id]);
   return <div ref={mountRef} style={{ position:'absolute', inset:0 }} />;
 }
 
 function App() {
   const [st, set] = useState({ screen:'intro', cat:'전체', selId:null,
     posX:40, posY:40, rot:false, printed:false, placements:[], shared:false,
-    measuredW:null, measuredD:null, accuracy:null, source:null, viewMode:'plan' });
+    measuredW:null, measuredD:null, accuracy:null, source:null, viewMode:'plan', roomOutline:null });
   const S = (patch) => set(prev => ({ ...prev, ...(typeof patch==='function'?patch(prev):patch) }));
   const go = (s) => S({ screen: s });
 
@@ -787,8 +947,10 @@ function App() {
 
   const { screen, cat, selId, posX, posY, rot, printed, placements, shared } = st;
   const roomW = st.measuredW ?? 360, roomD = st.measuredD ?? 300, showDims = true;
+  const isPoly = !!st.roomOutline;
+  const roomPolyCm = st.roomOutline || [[0,0],[roomW,0],[roomW,roomD],[0,roomD]];
 
-  const fitOrient = (w,d) => w<=roomW && d<=roomD && (roomW-w>=DOOR || roomD-d>=DOOR);
+  const fitOrient = (w,d) => w<=roomW && d<=roomD && (isPoly || roomW-w>=DOOR || roomD-d>=DOOR);
   const fitsAny = f => fitOrient(f.w,f.d) || fitOrient(f.d,f.w);
 
   const sel = FURN.find(f=>f.id===selId) || FURN[0];
@@ -799,14 +961,17 @@ function App() {
   const clampedPos = Math.min(posX, posMax);
   const posYc = Math.min(posY, posYMax);
   const rect = { x1:clampedPos, x2:clampedPos+effW, y1:posYc, y2:posYc+effD };
-  const doorRect = { x1:roomW-DOOR, x2:roomW, y1:roomD-DOOR, y2:roomD };
   const hit = (a,b)=> a.x1<b.x2 && b.x1<a.x2 && a.y1<b.y2 && b.y1<a.y2;
   const rectOf = p => ({ x1:p.posX, x2:p.posX+p.effW, y1:p.posY??0, y2:(p.posY??0)+p.effD });
-  const doorHit = hit(rect, doorRect);
   const collide = placements.find(p=>hit(rect, rectOf(p)));
-  const fits = !doorHit && !collide;
-  const inDoorBand = rect.y2 > doorRect.y1;
-  const gap = (inDoorBand ? doorRect.x1 : roomW) - rect.x2;
+  const _mx=(rect.x1+rect.x2)/2, _mz=(rect.y1+rect.y2)/2;
+  const _probes = [[rect.x1,rect.y1],[rect.x2,rect.y1],[rect.x2,rect.y2],[rect.x1,rect.y2],[_mx,rect.y1],[_mx,rect.y2],[rect.x1,_mz],[rect.x2,_mz],[_mx,_mz]];
+  const inRoom = _probes.every(([px,pz])=>_pointInPoly(px,pz, roomPolyCm));
+  const doorRect = { x1:roomW-DOOR, x2:roomW, y1:roomD-DOOR, y2:roomD };
+  const doorHit = !isPoly && hit(rect, doorRect);
+  const inDoorBand = !isPoly && rect.y2 > doorRect.y1;
+  const gap = isPoly ? 0 : ((inDoorBand ? doorRect.x1 : roomW) - rect.x2);
+  const fits = inRoom && !collide && !doorHit;
 
   const VIEW_W = 354, sc = VIEW_W/roomW;
   const bottomFor = y => 6 + (1 - y/roomD)*30;
@@ -821,7 +986,8 @@ function App() {
   const items=FURN.filter(f=>cat==='전체'||f.cat===cat).map(f=>({...f, ok:fitsAny(f)}));
 
   let verdictTitle, verdictBody, verdictVariant;
-  if (fits){ verdictVariant='pos'; verdictTitle='이 위치에 들어가요'; verdictBody='문·기존 가구와 겹치지 않아요. 옆 여유 '+Math.max(0,Math.round(gap))+'cm.'; }
+  if (fits){ verdictVariant='pos'; verdictTitle='이 위치에 들어가요'; verdictBody = isPoly ? '방 경계 안에 들어가고 겹치는 가구도 없어요.' : ('문·기존 가구와 겹치지 않아요. 옆 여유 '+Math.max(0,Math.round(gap))+'cm.'); }
+  else if (!inRoom){ verdictVariant='neg'; verdictTitle='방 밖으로 나가요'; verdictBody='가구가 방 경계를 벗어났어요. 안쪽으로 옮겨보세요.'; }
   else if (collide){ verdictVariant='neg'; verdictTitle='기존 가구와 겹쳐요'; verdictBody=collide.name+' 자리와 겹칩니다. 좌우·앞뒤로 옮기거나 회전해 보세요.'; }
   else { verdictVariant='neg'; verdictTitle='문 개폐 공간과 겹쳐요'; verdictBody=Math.abs(Math.round(gap))+'cm만큼 왼쪽이나 안쪽으로 옮겨보세요.'; }
 
@@ -830,9 +996,10 @@ function App() {
   /* ─────────── screens ─────────── */
 
   if (screen==='intro') return (
-    <Device footer={<div style={{display:'flex',flexDirection:'column',gap:10}}>
+    <Device footer={<div style={{display:'flex',flexDirection:'column',gap:8}}>
         <Btn onClick={()=>go('marker')}>시작하기</Btn>
         <Btn variant="ghost" onClick={()=>go('manual')}>마커 없이 치수 직접 입력</Btn>
+        <Btn variant="ghost" onClick={()=>go('polygon')}>다각형 방 그리기</Btn>
       </div>}>
       <Scroll>
         <div style={{ padding:'24px 0 8px' }}>
@@ -873,46 +1040,66 @@ function App() {
 
   if (screen==='manual') return (
     <ManualScreen initialW={st.measuredW??360} initialD={st.measuredD??300} onBack={()=>go('intro')}
-      onApply={(w,d)=>S({ measuredW:w, measuredD:d, accuracy:null, source:'manual',
+      onApply={(w,d)=>S({ measuredW:w, measuredD:d, accuracy:null, source:'manual', roomOutline:null,
         posX:Math.round(w/2), posY:Math.round(d/2), screen:'result' })} />
   );
 
+  if (screen==='polygon') return (
+    <PolygonMeasure onBack={()=>go('intro')}
+      onDone={(outlineCm, bboxW, bboxD)=>S({ roomOutline:outlineCm, measuredW:bboxW, measuredD:bboxD,
+        accuracy:null, source:'polygon', posX:Math.round(bboxW/2), posY:Math.round(bboxD/2), screen:'result' })} />
+  );
+
   if (screen==='result') {
-    const stats=[{k:'면적',v:(roomW*roomD/10000).toFixed(1)+'㎡'},{k:'둘레',v:((roomW+roomD)*2/100).toFixed(1)+'m'},{k:'천장고',v:'2.3m'}];
+    const polyArea = isPoly ? (()=>{ let s=0; for(let i=0;i<roomPolyCm.length;i++){ const a=roomPolyCm[i], b=roomPolyCm[(i+1)%roomPolyCm.length]; s+=a[0]*b[1]-b[0]*a[1]; } return Math.abs(s)/2/10000; })() : (roomW*roomD/10000);
+    const polyPerim = isPoly ? (()=>{ let s=0; for(let i=0;i<roomPolyCm.length;i++){ const a=roomPolyCm[i], b=roomPolyCm[(i+1)%roomPolyCm.length]; s+=Math.hypot(b[0]-a[0],b[1]-a[1]); } return s/100; })() : ((roomW+roomD)*2/100);
+    const stats=[{k:'면적',v:polyArea.toFixed(1)+'㎡'},{k:'둘레',v:polyPerim.toFixed(1)+'m'},{k:'천장고',v:'2.3m'}];
     const planMarkers=[{id:'A',left:'0%',top:'100%'},{id:'B',left:'100%',top:'100%'},{id:'C',left:'0%',top:'0%'},{id:'D',left:'100%',top:'0%'}];
     return (
       <Device footer={<Btn onClick={()=>go('catalog')}>가구 고르기</Btn>}>
         <div style={{ padding:'6px 20px 0', display:'flex', gap:6 }}>
-          {st.source==='manual'
-            ? <Badge color="var(--accent)" bg="rgba(0,102,255,0.1)">직접 입력</Badge>
-            : <Badge color="var(--pos)" bg="rgba(0,191,64,0.1)">정확도 ±{(st.accuracy ?? 1.2).toFixed(1)}cm</Badge>}
+          {st.source==='polygon'
+            ? <Badge color="var(--accent)" bg="rgba(0,102,255,0.1)">다각형</Badge>
+            : st.source==='manual'
+              ? <Badge color="var(--accent)" bg="rgba(0,102,255,0.1)">직접 입력</Badge>
+              : <Badge color="var(--pos)" bg="rgba(0,191,64,0.1)">정확도 ±{(st.accuracy ?? 1.2).toFixed(1)}cm</Badge>}
           {st.measuredW==null && <Badge color="var(--muted)" bg="rgba(0,0,0,0.05)">기본값</Badge>}
         </div>
-        <H title={st.source==='manual' ? '치수 입력 완료' : '측정 완료'}
-          sub={st.source==='manual' ? '입력한 치수로 배치 가능 여부를 확인해요.' : '마커 4개 기준으로 방 치수를 계산했습니다.'} />
+        <H title={st.source==='polygon' ? '방 그리기 완료' : st.source==='manual' ? '치수 입력 완료' : '측정 완료'}
+          sub={st.source==='polygon' ? '그린 다각형 기준으로 배치 가능 여부를 확인해요.' : st.source==='manual' ? '입력한 치수로 배치 가능 여부를 확인해요.' : '마커 4개 기준으로 방 치수를 계산했습니다.'} />
         <Scroll>
-          <div style={{ background:'#fff', borderRadius:20, padding:'26px 20px', display:'flex', justifyContent:'center' }}>
-            <div style={{ position:'relative' }}>
-              <div style={{ position:'relative', width:planW, height:planH, background:'rgba(0,102,255,0.05)',
-                border:'2px solid var(--accent)', borderRadius:6 }}>
-                <div style={{ position:'absolute', top:-2, left:'30%', width:'40%', height:5, background:'#38bdf8', borderRadius:2 }} />
-                <div style={{ position:'absolute', top:-20, left:'30%', width:'40%', textAlign:'center' }}>
-                  <Type v="caption" color="#38bdf8" weight="bold">창문</Type></div>
-                <div style={{ position:'absolute', right:0, bottom:0, width:DOOR/roomW*100+'%', height:DOOR/roomD*100+'%',
-                  background:'repeating-linear-gradient(45deg,rgba(255,146,0,0.15) 0 6px,transparent 6px 12px)',
-                  borderLeft:'1.5px dashed #f59e0b', borderTop:'1.5px dashed #f59e0b' }} />
-                {planMarkers.map(m=>(
-                  <div key={m.id} style={{ position:'absolute', left:m.left, top:m.top, transform:'translate(-50%,-50%)',
-                    width:22, height:22, borderRadius:6, background:'var(--accent)', color:'#fff', fontSize:11, fontWeight:800,
-                    display:'flex', alignItems:'center', justifyContent:'center' }}>{m.id}</div>
-                ))}
-              </div>
-              <div style={{ position:'absolute', bottom:-26, left:0, right:0, textAlign:'center' }}>
-                <Type v="body2" weight="bold" color="var(--accent)">{roomWText}</Type></div>
-              <div style={{ position:'absolute', right:-46, top:0, bottom:0, display:'flex', alignItems:'center' }}>
-                <Type v="body2" weight="bold" color="var(--accent)">{roomDText}</Type></div>
+          {isPoly ? (
+            <div style={{ background:'#fff', borderRadius:20, padding:'22px', display:'flex', justifyContent:'center' }}>
+              <svg viewBox={`-12 -12 ${roomW+24} ${roomD+24}`} style={{ width:'100%', maxWidth:300, aspectRatio:`${roomW+24} / ${roomD+24}` }}>
+                <polygon points={roomPolyCm.map(p=>p.join(',')).join(' ')}
+                  fill="rgba(0,102,255,0.06)" stroke="var(--accent)" strokeWidth="4" strokeLinejoin="round"/>
+                {roomPolyCm.map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r="7" fill="#fff" stroke="var(--accent)" strokeWidth="3"/>)}
+              </svg>
             </div>
-          </div>
+          ) : (
+            <div style={{ background:'#fff', borderRadius:20, padding:'26px 20px', display:'flex', justifyContent:'center' }}>
+              <div style={{ position:'relative' }}>
+                <div style={{ position:'relative', width:planW, height:planH, background:'rgba(0,102,255,0.05)',
+                  border:'2px solid var(--accent)', borderRadius:6 }}>
+                  <div style={{ position:'absolute', top:-2, left:'30%', width:'40%', height:5, background:'#38bdf8', borderRadius:2 }} />
+                  <div style={{ position:'absolute', top:-20, left:'30%', width:'40%', textAlign:'center' }}>
+                    <Type v="caption" color="#38bdf8" weight="bold">창문</Type></div>
+                  <div style={{ position:'absolute', right:0, bottom:0, width:DOOR/roomW*100+'%', height:DOOR/roomD*100+'%',
+                    background:'repeating-linear-gradient(45deg,rgba(255,146,0,0.15) 0 6px,transparent 6px 12px)',
+                    borderLeft:'1.5px dashed #f59e0b', borderTop:'1.5px dashed #f59e0b' }} />
+                  {planMarkers.map(m=>(
+                    <div key={m.id} style={{ position:'absolute', left:m.left, top:m.top, transform:'translate(-50%,-50%)',
+                      width:22, height:22, borderRadius:6, background:'var(--accent)', color:'#fff', fontSize:11, fontWeight:800,
+                      display:'flex', alignItems:'center', justifyContent:'center' }}>{m.id}</div>
+                  ))}
+                </div>
+                <div style={{ position:'absolute', bottom:-26, left:0, right:0, textAlign:'center' }}>
+                  <Type v="body2" weight="bold" color="var(--accent)">{roomWText}</Type></div>
+                <div style={{ position:'absolute', right:-46, top:0, bottom:0, display:'flex', alignItems:'center' }}>
+                  <Type v="body2" weight="bold" color="var(--accent)">{roomDText}</Type></div>
+              </div>
+            </div>
+          )}
           <div style={{ display:'flex', gap:10, marginTop:34 }}>
             {stats.map(s=>(
               <div key={s.k} style={{ flex:1, background:'#fff', borderRadius:14, padding:'14px 8px', textAlign:'center' }}>
@@ -1005,7 +1192,8 @@ function App() {
               screen:'saved', shared:false }))} style={{flex:1}}>이 배치 저장</Btn>
         </div>}>
         <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)', background:'#E7EAE3' }}>
-          <RoomViewer3D roomW={roomW} roomD={roomD} doorMM={DOOR}
+          <RoomViewer3D outline={roomPolyCm.map(([x,z])=>[x/100,z/100])}
+            door={isPoly?null:{x0:(roomW-DOOR)/100, x1:roomW/100, z:roomD/100, r:DOOR/100}}
             sel={{ id:sel.id, w:sel.w, d:sel.d, h:sel.h, color:sel.fg }}
             selCx={selCx} selCz={selCz} selRot={rot?90:0} fits={fits} ghosts={ghosts}
             mode={st.viewMode}
