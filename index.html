@@ -598,57 +598,6 @@ function Furniture3D({ kind, w, d, h, hex, height=260, spin=true, yaw=0.6, drag=
 }
 
 /* ─── manual room-dimension input (no marker / camera needed) ─── */
-function ManualScreen({ initialW=360, initialD=300, onApply, onBack }){
-  const [w,setW]=useState(String(initialW));
-  const [d,setD]=useState(String(initialD));
-  const nw=parseInt(w)||0, nd=parseInt(d)||0;
-  const valid = nw>=100 && nw<=1000 && nd>=100 && nd<=1000;
-  const presets=[{n:'원룸',w:330,d:300},{n:'침실',w:400,d:300},{n:'거실',w:450,d:400},{n:'큰 방',w:500,d:450}];
-  const Field=({label,val,set})=>(
-    <div style={{ flex:1, minWidth:0 }}>
-      <Type v="caption" color="var(--muted)" style={{marginBottom:6}}>{label}</Type>
-      <div style={{ display:'flex', alignItems:'center', background:'#fff', border:'1px solid var(--line)',
-        borderRadius:14, padding:'0 14px' }}>
-        <input type="number" inputMode="numeric" value={val} onChange={e=>set(e.target.value)}
-          style={{ flex:1, minWidth:0, border:'none', outline:'none', fontFamily:'inherit', fontSize:22,
-            fontWeight:700, padding:'14px 0', background:'transparent', color:'var(--ink)' }} />
-        <Type v="body" color="var(--muted)">cm</Type>
-      </div>
-    </div>
-  );
-  return (
-    <Device footer={<Btn disabled={!valid} onClick={()=>onApply(nw,nd)}>이 치수로 시작</Btn>}>
-      <div style={{ padding:'6px 20px 0' }}>
-        <button onClick={onBack} style={{ border:'none', background:'none', cursor:'pointer', padding:0, color:'var(--accent)', fontWeight:700, fontSize:14 }}>← 뒤로</button>
-      </div>
-      <H title="방 치수 입력" sub="마커·카메라 없이 방 가로·세로를 직접 입력해요." />
-      <Scroll>
-        <div style={{ display:'flex', gap:12 }}>
-          {Field({label:'가로 (W)', val:w, set:setW})}
-          {Field({label:'세로 (D)', val:d, set:setD})}
-        </div>
-        <div style={{ marginTop:14, textAlign:'center', background:'rgba(0,102,255,0.06)', borderRadius:14, padding:'12px' }}>
-          <Type v="caption" color="var(--muted)">예상 면적</Type>
-          <Type v="title3" weight="bold" color="var(--accent)" style={{marginTop:2}}>
-            {valid ? (nw*nd/10000).toFixed(1)+'㎡  ·  '+(nw/100).toFixed(2)+'m × '+(nd/100).toFixed(2)+'m' : '가로·세로를 100~1000cm로 입력'}</Type>
-        </div>
-        <Type v="caption" color="var(--muted)" style={{margin:'18px 0 8px'}}>빠른 선택</Type>
-        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-          {presets.map(p=>(
-            <button key={p.n} onClick={()=>{ setW(String(p.w)); setD(String(p.d)); }}
-              style={{ border:'none', cursor:'pointer', fontFamily:'inherit', padding:'9px 14px', borderRadius:99,
-                fontSize:13, fontWeight:600, background:'#fff', boxShadow:'inset 0 0 0 1px var(--line)', color:'#374151' }}>
-              {p.n} · {p.w}×{p.d}</button>
-          ))}
-        </div>
-        <div style={{marginTop:16}}>
-          <SectionMessage title="줄자로 벽 사이를 재보세요">벽에서 마주 보는 벽까지의 안쪽 거리를 cm로 입력하면 됩니다. 나중에 마커 스캔으로 더 정밀하게 다시 측정할 수도 있어요.</SectionMessage>
-        </div>
-      </Scroll>
-    </Device>
-  );
-}
-
 /* ─── room viewer: schematic (plan) ↔ 3D, real measured room + furniture ─── */
 function _dimSprite(text){
   const cv=document.createElement('canvas'); cv.width=512; cv.height=128;
@@ -924,7 +873,13 @@ function PolygonMeasure({ onDone, onBack }){
   const onUp=()=>setDragIdx(null);
   const undo=()=>{ if(closed){ setClosed(false); setSelWall(null); return; } if(n>0) setPoints(points.slice(0,-1)); };
   const reset=()=>{ setPoints([]); setClosed(false); setSelWall(null); setHover(null); };
-  const loadEx=()=>{ setPoints([{x:1,z:1},{x:6.2,z:1},{x:6.2,z:4},{x:4.6,z:4},{x:4.6,z:5.4},{x:1,z:5.4}]); setClosed(true); setSelWall(null); setHover(null); };
+  const PM_EXAMPLES=[
+    {n:'원룸 3.3×3.0', pts:[{x:1,z:1},{x:4.3,z:1},{x:4.3,z:4},{x:1,z:4}]},
+    {n:'침실 4.0×3.0', pts:[{x:1,z:1},{x:5,z:1},{x:5,z:4},{x:1,z:4}]},
+    {n:'거실 4.5×4.0', pts:[{x:1,z:1},{x:5.5,z:1},{x:5.5,z:5},{x:1,z:5}]},
+    {n:'ㄱ자 5.2×4.4', pts:[{x:1,z:1},{x:6.2,z:1},{x:6.2,z:4},{x:4.6,z:4},{x:4.6,z:5.4},{x:1,z:5.4}]},
+  ];
+  const loadPreset=(pts)=>{ setPoints(pts.map(p=>({...p}))); setClosed(true); setSelWall(null); setHover(null); };
   const applyCalib=()=>{ const v=parseFloat(calib); if(!(v>0)||selWall===null||n<2) return;
     const cur=_pmDist(points[selWall],points[(selWall+1)%n]); if(cur<1e-6) return; const f=Math.min(5,Math.max(0.2,v/cur));
     setPoints(pts=>pts.map(p=>({x:Math.round((cen.x+(p.x-cen.x)*f)*1000)/1000, z:Math.round((cen.z+(p.z-cen.z)*f)*1000)/1000}))); };
@@ -952,6 +907,14 @@ function PolygonMeasure({ onDone, onBack }){
           <button onClick={onBack} style={{ border:'none', background:'none', cursor:'pointer', padding:0, color:PM_C.blue, fontWeight:700, fontSize:14 }}>← 뒤로</button>
           <div style={{ fontSize:18, fontWeight:800, color:PM_C.ink, marginTop:2 }}>다각형 방 측정</div>
           <div style={{ fontSize:12.5, color:PM_C.soft, marginTop:1 }}>격자를 탭해 방 모서리마다 측점을 찍고, 첫 점을 다시 탭하면 닫혀요.</div>
+        </div>
+        <div style={{ display:'flex', gap:6, overflowX:'auto', padding:'0 16px 8px', alignItems:'center' }}>
+          <span style={{ flexShrink:0, fontSize:11.5, fontWeight:700, color:PM_C.soft, marginRight:2 }}>방 크기 예시</span>
+          {PM_EXAMPLES.map(ex=>(
+            <button key={ex.n} onClick={()=>loadPreset(ex.pts)} style={{ flexShrink:0, fontFamily:'inherit', fontSize:12,
+              fontWeight:600, cursor:'pointer', background:PM_C.paper, color:PM_C.ink, border:`1px solid rgba(38,49,58,0.3)`,
+              borderRadius:99, padding:'6px 12px', whiteSpace:'nowrap' }}>{ex.n}</button>
+          ))}
         </div>
         <div style={{ flex:1, position:'relative', minHeight:0 }}>
           <svg ref={svgRef} viewBox="-0.7 -0.7 11.4 8.4"
@@ -994,7 +957,6 @@ function PolygonMeasure({ onDone, onBack }){
             <button onClick={()=>setAngleSnap(!angleSnap)} style={{...btn, background:angleSnap?PM_C.ink:'transparent', color:angleSnap?PM_C.paper:PM_C.ink}}>45° {angleSnap?'ON':'OFF'}</button>
             <button onClick={undo} disabled={n===0} style={{...btn, opacity:n===0?0.4:1}}>{closed?'다시 열기':'취소'}</button>
             {!closed&&n>=3&&<button onClick={()=>{ if(!_pmCrosses(points[n-1],points[0],points,[0,n-2])){setClosed(true);setHover(null);} }} style={{...btn, borderColor:PM_C.green, color:PM_C.green}}>닫기</button>}
-            <button onClick={loadEx} style={btn}>예시</button>
             <button onClick={reset} style={btn}>처음부터</button>
           </div>
           {closed&&selWall!==null&&(
@@ -1207,7 +1169,6 @@ function App() {
   if (screen==='intro') return (
     <Device footer={<div style={{display:'flex',flexDirection:'column',gap:10}}>
         <Btn onClick={()=>go('scan')}>시작하기</Btn>
-        <Btn variant="ghost" onClick={()=>go('manual')}>마커 없이 치수 직접 입력</Btn>
       </div>}>
       <Scroll>
         <div style={{ padding:'24px 0 8px' }}>
@@ -1244,12 +1205,6 @@ function App() {
     <PolygonScanScreen onBack={()=>go('intro')} onManual={()=>go('polygon')}
       onDone={(outlineCm, bboxW, bboxD)=>S({ roomOutline:outlineCm, measuredW:bboxW, measuredD:bboxD,
         accuracy:null, source:'polygon', posX:Math.round(bboxW/2), posY:Math.round(bboxD/2), screen:'result' })} />
-  );
-
-  if (screen==='manual') return (
-    <ManualScreen initialW={st.measuredW??360} initialD={st.measuredD??300} onBack={()=>go('intro')}
-      onApply={(w,d)=>S({ measuredW:w, measuredD:d, accuracy:null, source:'manual', roomOutline:null,
-        posX:Math.round(w/2), posY:Math.round(d/2), screen:'result' })} />
   );
 
   if (screen==='polygon') return (
