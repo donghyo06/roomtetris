@@ -15,6 +15,7 @@
 <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/posit1.js"></script>
 <!-- three.js: procedural 3D furniture models -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   :root { --accent:#0066FF; --pos:#00BF40; --neg:#FF4242; --ink:#111; --muted:#6b7280; --line:rgba(0,0,0,0.08);
@@ -164,45 +165,55 @@ const won = n => n.toLocaleString('ko-KR') + '원';
 
 /* ─── AI backend: key-hiding proxy(권장) 또는 각자 키로 직접 호출 ─── */
 const DEFAULT_PROXY = 'https://roomtetris-ai.dlehdgy2068.workers.dev';  // ← 배포한 프록시 Worker URL을 넣으면(예: 'https://roomtetris-ai.xxx.workers.dev') 사용자는 키 없이 사용
-function aiEndpoint(apiKey){
-  let proxy=''; try{ proxy=localStorage.getItem('rt_proxyUrl')||''; }catch(e){}
-  proxy=(proxy||DEFAULT_PROXY||'').trim();
-  if(proxy){ if(proxy.endsWith('/')) proxy=proxy.slice(0,-1);
-    return { url:proxy, headers:{ 'content-type':'application/json' } }; }
-  return { url:'https://api.anthropic.com/v1/messages',
-    headers:{ 'content-type':'application/json', 'x-api-key':apiKey, 'anthropic-version':'2023-06-01',
-      'anthropic-dangerous-direct-browser-access':'true' } };
+function aiEndpoint(){
+  let proxy=(DEFAULT_PROXY||'').trim();
+  if(proxy.endsWith('/')) proxy=proxy.slice(0,-1);
+  return { url:proxy, headers:{ 'content-type':'application/json' } };
 }
 
 /* ─── AI: extract furniture specs from a product page (Anthropic API + web_fetch tool) ─── */
-async function aiFetchFurniture(url, apiKey){
-  const prompt = '다음 가구 판매 페이지를 web_fetch로 읽고 정보를 추출해줘: ' + url +
-    ' — 응답 마지막에 코드블록 없이 JSON 객체 하나만 출력해. 형식: {"name":"제품명(짧게)","shape":"sofa|bed|table|shelf|wardrobe 중 하나","w":가로숫자,"d":깊이숫자,"h":높이숫자,"price":가격숫자,"image":"대표 상품 사진의 절대 URL(jpg/png/webp, 못 찾으면 빈 문자열)","desc":"외형 상세 묘사: 전체 형태, 부위별 색상(hex 추정), 재질, 다리 모양·개수, 쿠션·서랍·선반·헤드보드 구성 등 3~4문장"} ' +
-    '치수는 반드시 cm 단위 숫자(mm이면 10으로 나눠), 가격은 원 단위 숫자(모르면 0). 책상·식탁·테이블은 table, 서랍장·수납장·옷장은 wardrobe, 선반·책장은 shelf, 소파는 sofa, 침대·매트리스는 bed.';
-  const ep = aiEndpoint(apiKey);
-  const res = await fetch(ep.url, {
-    method:'POST',
-    headers:{ ...ep.headers, 'anthropic-beta':'web-fetch-2025-09-10' },
-    body: JSON.stringify({ model:'claude-haiku-4-5', max_tokens:2048,
-      tools:[{ type:'web_fetch_20250910', name:'web_fetch', max_uses:3 }],
-      messages:[{ role:'user', content:prompt }] })
-  });
-  if(!res.ok){ let msg='요청 실패 ('+res.status+')';
-    try{ const e=await res.json(); if(e&&e.error&&e.error.message) msg=e.error.message; }catch(_){}
-    throw new Error(msg); }
-  const data = await res.json();
+async function aiFetchFurniture(url, hintName){
+  const hint=(hintName||'').trim();
+  const intro = hint
+    ? '가구 정보를 수집하는 작업이야. 판매 URL: ' + url + ' (페이지는 차단돼 있을 수 있음). 사용자가 알려준 정확한 제품명: "' + hint + '". web_search로 이 제품명을 검색해 치수·가격·대표 사진·외형 정보를 수집해. 페이지가 읽히면 참고하되, 이 제품명과 일치하는 상품의 정보만 사용해. '
+    : '가구 판매 페이지에서 정보를 추출하는 작업이야. 대상 URL: ' + url +
+      ' — 절차: 1) web_fetch로 페이지를 읽어. 2) 내용이 비어 있거나 차단됐으면 web_search로 알아내: 먼저 URL 전체로 검색하고, 쿠팡·지마켓처럼 URL에 상품번호만 있으면 "사이트명 상품번호"(예: 쿠팡 8065760959)로 검색해 그 상품의 제품명을 먼저 알아낸 뒤, 그 제품명으로 다시 검색해 치수·가격·사진을 모아. 3) 이렇게 모은 정보는 이 URL의 바로 그 상품(같은 제품명)이 확실할 때만 사용해. ';
+  const prompt = intro +
+    '절대 규칙: 비슷해 보이는 다른 상품의 정보로 대체하지 마. 페이지로도 검색으로도 이 상품이 무엇인지 특정하지 못하면, 지어내지 말고 {"fail":"이유 한 문장(예: 사이트가 봇을 차단해 읽을 수 없음)"} JSON만 출력해. ' +
+    '상품을 특정한 경우: 일부 치수만 불명확하면 같은 상품군의 일반값으로 보정하고 desc 끝에 "(일부 치수 추정)"을 붙여. 응답 마지막에 코드블록 없이 JSON 객체 하나만 출력해: ' +
+    '{"name":"제품명(짧게)","shape":"sofa|bed|table|shelf|wardrobe 중 하나","w":가로숫자,"d":깊이숫자,"h":높이숫자,"price":가격숫자,"image":"대표 상품 사진의 절대 URL(jpg/png/webp, 못 찾으면 빈 문자열)","desc":"외형 상세 묘사: 전체 형태, 부위별 색상(hex 추정), 재질, 다리 모양·개수, 쿠션·서랍·선반·헤드보드 구성 등 3~4문장"} ' +
+    'JSON 문자열 값 안에 중괄호 문자를 쓰지 마. 치수는 반드시 cm 단위 숫자(mm이면 10으로 나눠), 가격은 원 단위 숫자(모르면 0). 책상·식탁·테이블은 table, 서랍장·수납장·옷장은 wardrobe, 선반·책장은 shelf, 소파는 sofa, 침대·매트리스는 bed.';
+  const ep = aiEndpoint();
+  const tools=[{ type:'web_fetch_20250910', name:'web_fetch', max_uses:4 },
+    { type:'web_search_20250305', name:'web_search', max_uses:3 }];
+  let messages=[{ role:'user', content:prompt }], data=null;
+  for(let turn=0; turn<4; turn++){
+    const res = await fetch(ep.url, {
+      method:'POST',
+      headers:{ ...ep.headers, 'anthropic-beta':'web-fetch-2025-09-10' },
+      body: JSON.stringify({ model:'claude-sonnet-5', max_tokens:3000, tools:tools, messages:messages })
+    });
+    if(!res.ok){ let msg='요청 실패 ('+res.status+')';
+      try{ const e=await res.json(); if(e&&e.error&&e.error.message) msg=e.error.message; }catch(_){}
+      throw new Error(msg); }
+    data = await res.json();
+    if(data.stop_reason!=='pause_turn') break;
+    messages = messages.concat([{ role:'assistant', content:data.content }]);
+  }
   const texts=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join(' ');
   const b=texts.lastIndexOf('}'); const a=texts.lastIndexOf('{', b);
-  if(a<0||b<=a) throw new Error('페이지에서 가구 정보를 찾지 못했어요');
-  return JSON.parse(texts.slice(a, b+1));
+  if(a<0||b<=a) throw new Error('페이지에서 가구 정보를 찾지 못했어요. 다른 링크로 시도해 보세요.');
+  let j=null; try{ j=JSON.parse(texts.slice(a, b+1)); }
+  catch(e){ throw new Error('정보 해석에 실패했어요. 한 번 더 시도해 주세요.'); }
+  return j;
 }
 
 /* ─── AI: generate a look-alike three.js model from product photo + description ─── */
-async function aiBuildModel(spec, apiKey){
+async function aiBuildModel(spec){
   const rules = 'three.js r128 코드 작성 규칙: (THREE, W, D, H, COLOR) 인자를 받는 함수의 본문만 작성하고 반드시 THREE.Group을 return. ' +
     'W=가로(x), D=깊이(z), H=높이(y), 단위 cm. 바닥 y=0, x/z 중심 0 근처. 전체 크기가 W×D×H에 맞아야 함. ' +
-    'BoxGeometry, CylinderGeometry, SphereGeometry, ConeGeometry, TorusGeometry와 MeshStandardMaterial만 사용. ' +
-    '텍스처·이미지 로드·비동기·document/window/fetch 접근 금지. 부품 15~40개로 실물의 색상(hex로 직접 지정), 비례, 특징(다리 모양·개수, 쿠션 수, 서랍·선반, 프레임, 팔걸이, 헤드보드 등)을 최대한 충실히 재현. ' +
+    'BoxGeometry, CylinderGeometry, SphereGeometry, ConeGeometry, TorusGeometry와 MeshStandardMaterial만 사용(geometry.translate/rotate 허용). CapsuleGeometry 등 r128에 없는 클래스는 절대 금지. ' +
+    '텍스처·이미지 로드·비동기·document/window/fetch 접근 금지. 부품 15~40개, 전체 120줄 이내로 완결되게. 실물의 색상(hex로 직접 지정), 비례, 특징(다리 모양·개수, 쿠션 수, 서랍·선반, 프레임, 팔걸이, 헤드보드 등)을 최대한 충실히 재현. ' +
     '코드는 <model>과 </model> 사이에만 출력하고 다른 텍스트·코드블록 금지.';
   const content=[];
   if(spec.image){ content.push({ type:'image', source:{ type:'url', url:spec.image } }); }
@@ -210,19 +221,28 @@ async function aiBuildModel(spec, apiKey){
     (spec.image?'첨부한 상품 사진과 ':'')+'다음 정보를 바탕으로 이 가구를 실물과 최대한 비슷하게 재현하는 three.js 코드를 작성해줘. '+
     '제품명: '+spec.name+', 크기: W'+spec.w+' × D'+spec.d+' × H'+spec.h+'cm. 외형 정보: '+(spec.desc||'없음')+' '+rules });
   const mkBody=(ct)=>JSON.stringify({ model:'claude-sonnet-5', max_tokens:4000, messages:[{ role:'user', content:ct }] });
-  const ep = aiEndpoint(apiKey);
+  const ep = aiEndpoint();
   const call=(bodyStr)=>fetch(ep.url, { method:'POST', headers:ep.headers, body:bodyStr });
-  let res=await call(mkBody(content));
-  if(!res.ok && spec.image){ res=await call(mkBody(content.filter(c=>c.type==='text'))); }
-  if(!res.ok){ let msg='모델 생성 실패 ('+res.status+')';
-    try{ const e=await res.json(); if(e&&e.error&&e.error.message) msg=e.error.message; }catch(_){}
-    throw new Error(msg); }
-  const data=await res.json();
-  const texts=(data.content||[]).filter(blk=>blk.type==='text').map(blk=>blk.text).join(' ');
-  const i1=texts.indexOf('<model>'), i2=texts.indexOf('</model>');
-  if(i1<0||i2<=i1) throw new Error('생성된 모델 코드를 찾지 못했어요');
-  let code=texts.slice(i1+7, i2).trim();
-  code=code.replace(/^```[a-z]*\s*/i,'').replace(/```\s*$/,'');
+  const attempt=async(ct)=>{
+    let res=await call(mkBody(ct));
+    if(!res.ok && spec.image){ res=await call(mkBody(ct.filter(c=>c.type==='text'))); }
+    if(!res.ok){ let msg='모델 생성 실패 ('+res.status+')';
+      try{ const e=await res.json(); if(e&&e.error&&e.error.message) msg=e.error.message; }catch(_){}
+      throw new Error(msg); }
+    const data=await res.json();
+    const texts=(data.content||[]).filter(blk=>blk.type==='text').map(blk=>blk.text).join(' ');
+    const i1=texts.indexOf('<model>'), i2=texts.indexOf('</model>');
+    if(i1<0||i2<=i1) return null;
+    let code=texts.slice(i1+7, i2).trim();
+    code=code.replace(/^```[a-z]*\s*/i,'').replace(/```\s*$/,'');
+    return code;
+  };
+  let code=await attempt(content);
+  if(!code){
+    const strict=content.map(c=>c.type==='text'?{ type:'text', text:c.text+' 설명·사과·주석 없이 <model>코드</model>만 즉시 출력해.' }:c);
+    code=await attempt(strict);
+  }
+  if(!code) throw new Error('생성된 모델 코드를 찾지 못했어요');
   return code;
 }
 
@@ -628,8 +648,27 @@ function _fitModelToDims(g, w, d, h){
   inner.scale.set(w/Math.max(1e-6,size.x), h/Math.max(1e-6,size.y), d/Math.max(1e-6,size.z));
   const wrap=new THREE.Group(); wrap.add(inner); return wrap;
 }
-// spec: { kind, modelCode } — modelCode is an AI-generated builder (function body)
-function makeFurnitureModel(spec, w, d, h, hex){
+// GLB mesh cache (Meshy results) — shared across views, cloned per instance
+const _meshCache = {};
+function loadMeshModel(url){
+  if(!_meshCache[url]) _meshCache[url] = new Promise((resolve, reject)=>{
+    try{ new THREE.GLTFLoader().load(url, g=>resolve(g.scene), undefined, reject); }catch(e){ reject(e); }
+  });
+  return _meshCache[url];
+}
+// spec: { kind, modelCode, meshUrl } — meshUrl(실물 GLB) > modelCode(AI 코드) > 기본 도형
+function makeFurnitureModel(spec, w, d, h, hex, onReady){
+  if(spec && spec.meshUrl && typeof THREE!=='undefined' && THREE.GLTFLoader){
+    const holder=new THREE.Group();
+    loadMeshModel(spec.meshUrl).then(src=>{
+      holder.add(_fitModelToDims(src.clone(true), w, d, h));
+      if(onReady) onReady(holder);
+    }).catch(()=>{
+      holder.add(buildFurniture((spec && spec.kind)||'box', w, d, h, hex));
+      if(onReady) onReady(holder);
+    });
+    return holder;
+  }
   if(spec && spec.modelCode){
     try{
       const fn=new Function('THREE','W','D','H','COLOR', spec.modelCode);
@@ -658,7 +697,7 @@ function renderThumb(renderer, kind, w,d,h,hex, size, code){
   return url;
 }
 // live rotatable 3D view (catalog preview + placement)
-function Furniture3D({ kind, w, d, h, hex, height=260, spin=true, yaw=0.6, drag=true, code=null }){
+function Furniture3D({ kind, w, d, h, hex, height=260, spin=true, yaw=0.6, drag=true, code=null, mesh=null }){
   const ref=useRef(null);
   useEffect(()=>{
     if(typeof THREE==='undefined'||!ref.current) return;
@@ -667,8 +706,9 @@ function Furniture3D({ kind, w, d, h, hex, height=260, spin=true, yaw=0.6, drag=
     renderer.setPixelRatio(Math.min(2,window.devicePixelRatio||1)); renderer.setSize(W,H);
     el.appendChild(renderer.domElement);
     const scene=new THREE.Scene(); _lights(scene);
-    const obj=makeFurnitureModel({kind:kind, modelCode:code},w,d,h,hex);
+    const obj=makeFurnitureModel({kind:kind, modelCode:code, meshUrl:mesh},w,d,h,hex);
     const bb=new THREE.Box3().setFromObject(obj), s=bb.getSize(new THREE.Vector3());
+    if(!isFinite(s.x)||s.x<=0) s.set(w,h,d);
     obj.position.y = -s.y/2;                          // center vertically for rotation
     const pivot=new THREE.Group(); pivot.add(obj); scene.add(pivot);
     const maxd=Math.max(s.x,s.y,s.z), dist=maxd*2.1;
@@ -691,7 +731,7 @@ function Furniture3D({ kind, w, d, h, hex, height=260, spin=true, yaw=0.6, drag=
       obj.traverse(o=>{ o.geometry&&o.geometry.dispose(); o.material&&o.material.dispose(); });
       renderer.dispose(); if(cvs.parentNode) cvs.parentNode.removeChild(cvs);
     };
-  },[kind,w,d,h,hex,height,spin,yaw,drag,code]);
+  },[kind,w,d,h,hex,height,spin,yaw,drag,code,mesh]);
   return <div ref={ref} style={{ width:'100%', height }} />;
 }
 
@@ -1162,9 +1202,11 @@ function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, 
     const ghostMeshes=[];
     (ghosts||[]).forEach(g=>{
       const m=new THREE.Group();
-      const obj=makeFurnitureModel({kind:g.kind||'box', modelCode:g.modelCode}, g.w, g.d, g.h, g.color);
+      const _ghostFx=(root)=>root.traverse(o=>{ if(o.isMesh){ o.castShadow=true;
+        if(!g.solid){ o.material=o.material.clone(); o.material.transparent=true; o.material.opacity=0.55; } } });
+      const obj=makeFurnitureModel({kind:g.kind||'box', modelCode:g.modelCode, meshUrl:g.meshUrl}, g.w, g.d, g.h, g.color, _ghostFx);
       obj.scale.setScalar(0.01);
-      obj.traverse(o=>{ if(o.isMesh){ o.castShadow=true; if(!g.solid){ o.material.transparent=true; o.material.opacity=0.55; } } });
+      _ghostFx(obj);
       m.add(obj);
       m.rotation.y=THREE.MathUtils.degToRad(g.rot||0);
       m.position.set(g.cx/100,0,g.cz/100); m.scale.y=0.012;
@@ -1173,9 +1215,10 @@ function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, 
     const selMesh=new THREE.Group(), padGrp=new THREE.Group(), selMats=[];
     let padMat=null, ringMat=null;
     if(sel){
-      const selObj=makeFurnitureModel({kind:sel.kind||KIND[sel.id]||'box', modelCode:sel.modelCode}, sel.w, sel.d, sel.h, sel.color);
+      const _selFx=(root)=>root.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.material=o.material.clone(); selMats.push(o.material); } });
+      const selObj=makeFurnitureModel({kind:sel.kind||KIND[sel.id]||'box', modelCode:sel.modelCode, meshUrl:sel.meshUrl}, sel.w, sel.d, sel.h, sel.color, _selFx);
       selObj.scale.setScalar(0.01);
-      selObj.traverse(o=>{ if(o.isMesh){ o.castShadow=true; selMats.push(o.material); } });
+      _selFx(selObj);
       selMesh.add(selObj);
       // footprint pad + outline under the selected item (kept unsquashed, colored by fit)
       const padGeo=new THREE.PlaneGeometry(sel.w/100, sel.d/100);
@@ -1253,16 +1296,12 @@ function App() {
   const [savedView, setSavedView] = useState('plan');
   const [customFurn, setCustomFurn] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null });
+  const [addForm, setAddForm] = useState({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null, meshUrl:null });
   const [aiUrl, setAiUrl] = useState('');
-  const [aiKey, _setAiKey] = useState(()=>{ try{ return localStorage.getItem('rt_aiKey')||''; }catch(e){ return ''; } });
-  const setAiKey = (k)=>{ _setAiKey(k); try{ if(k) localStorage.setItem('rt_aiKey', k); else localStorage.removeItem('rt_aiKey'); }catch(e){} };
-  const [proxyUrl, _setProxyUrl] = useState(()=>{ try{ return localStorage.getItem('rt_proxyUrl')||''; }catch(e){ return ''; } });
-  const setProxyUrl = (v)=>{ _setProxyUrl(v); try{ if(v) localStorage.setItem('rt_proxyUrl', v); else localStorage.removeItem('rt_proxyUrl'); }catch(e){} };
-  const aiReady = !!(proxyUrl.trim() || DEFAULT_PROXY || aiKey.trim());
   const [aiBusy, setAiBusy] = useState(false);
   const [aiErr, setAiErr] = useState(null);
-  const [showKey, setShowKey] = useState(false);
+  const [aiName, setAiName] = useState('');
+  const [aiNeedName, setAiNeedName] = useState(false);
   const allFurn = [...FURN, ...customFurn];
   useEffect(() => {
     if (typeof THREE === 'undefined') return;
@@ -1270,7 +1309,27 @@ function App() {
     catch(e){ return; }
     r.setPixelRatio(Math.min(2, window.devicePixelRatio||1));
     const out = {};
-    for (const f of allFurn) { try { out[f.id] = renderThumb(r, f.kind||KIND[f.id]||'box', f.w, f.d, f.h, f.fg, 240, f.modelCode); } catch(e){} }
+    for (const f of allFurn) {
+      if (f.meshUrl) { const fid=f.id, fw=f.w, fd=f.d, fh=f.h;
+        loadMeshModel(f.meshUrl).then(src=>{
+          let r2=null;
+          try{
+            r2=new THREE.WebGLRenderer({ alpha:true, antialias:true, preserveDrawingBuffer:true });
+            const scene=new THREE.Scene(); _lights(scene);
+            scene.add(_fitModelToDims(src.clone(true), fw, fd, fh));
+            const maxd=Math.max(fw,fd,fh), dist=maxd*2.05;
+            const cam=new THREE.PerspectiveCamera(32,1,1,10000);
+            cam.position.set(dist*0.72, fh/2+dist*0.62, dist*0.9); cam.lookAt(0, fh*0.55, 0);
+            r2.setSize(240,240); r2.render(scene,cam);
+            const durl=r2.domElement.toDataURL('image/png');
+            setThumbs(prev=>({ ...prev, [fid]: durl }));
+          }catch(e){}
+          if(r2) r2.dispose();
+        }).catch(()=>{});
+        continue;
+      }
+      try { out[f.id] = renderThumb(r, f.kind||KIND[f.id]||'box', f.w, f.d, f.h, f.fg, 240, f.modelCode); } catch(e){}
+    }
     r.dispose(); setThumbs(out);
   }, [customFurn]);
 
@@ -1451,7 +1510,7 @@ function App() {
               animation:'sheetup .34s cubic-bezier(.2,.75,.25,1) both', boxShadow:'0 -12px 40px rgba(16,24,40,.25)' }}>
               <div style={{ width:40, height:4, borderRadius:99, background:'#e5e7eb', margin:'6px auto 8px' }} />
               <div style={{ background:'#f6f7f9', borderRadius:18, overflow:'hidden' }}>
-                <Furniture3D kind={f.kind||KIND[f.id]||'box'} code={f.modelCode||null} w={f.w} d={f.d} h={f.h} hex={f.fg} height={240} />
+                <Furniture3D kind={f.kind||KIND[f.id]||'box'} code={f.modelCode||null} mesh={f.meshUrl||null} w={f.w} d={f.d} h={f.h} hex={f.fg} height={240} />
               </div>
               <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:14 }}>
                 <Badge size="xsmall" color={f.fg} bg={f.fg+'1A'}>{f.cat}</Badge>
@@ -1482,15 +1541,18 @@ function App() {
         const submit=()=>{ if(!canAdd) return;
           const item={ id:'custom_'+Date.now(), name:addForm.name.trim(), cat:cur[2], w:Math.round(W), d:Math.round(D), h:Math.round(Hh),
             price:Math.max(0, Math.round(parseFloat(addForm.price)||0)), fg:cur[3], kind:cur[0], custom:true,
-            url:addForm.url||undefined, modelCode:addForm.modelCode||undefined };
-          setCustomFurn(cs=>[...cs, item]); setShowAdd(false); setAiUrl(''); setAiErr(null);
-          setAddForm({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null }); };
+            url:addForm.url||undefined, modelCode:addForm.modelCode||undefined, meshUrl:addForm.meshUrl||undefined };
+          setCustomFurn(cs=>[...cs, item]); setShowAdd(false); setAiUrl(''); setAiErr(null); setAiName(''); setAiNeedName(false);
+          setAddForm({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null, meshUrl:null }); };
         const runAi=async()=>{
           const u=aiUrl.trim(); if(!u||aiBusy) return;
           setAiBusy('fetch'); setAiErr(null);
           let info=null;
           try{
-            const j=await aiFetchFurniture(u, aiKey.trim());
+            const j=await aiFetchFurniture(u, aiName);
+            if(j && j.fail){ setAiNeedName(true);
+              throw new Error(String(j.fail).slice(0,140)+' — 아래에 상품명을 붙여넣으면 상품명 기준으로 만들어드려요.'); }
+            setAiNeedName(false);
             const okShapes=['sofa','bed','table','shelf','wardrobe'];
             const num=v=>{ const n=Math.round(parseFloat(v)); return isFinite(n)?n:NaN; };
             let w=num(j.w), d=num(j.d), h=num(j.h);
@@ -1500,15 +1562,37 @@ function App() {
               w:w, d:d, h:h, price:Math.max(0,Math.round(Number(j.price)||0)),
               image:(typeof j.image==='string'&&j.image.indexOf('http')===0)?j.image:'', desc:String(j.desc||'') };
             setAddForm(fm=>({ ...fm, name:info.name, shape:info.shape, w:String(info.w), d:String(info.d), h:String(info.h),
-              price:String(info.price), url:u, modelCode:null }));
+              price:String(info.price), url:u, modelCode:null, meshUrl:null }));
           }catch(e){ setAiErr(e&&e.message?String(e.message).slice(0,180):'가져오기에 실패했어요'); setAiBusy(false); return; }
+          if(info.image){
+            setAiBusy('mesh');
+            try{
+              const cr=await fetch(DEFAULT_PROXY+'/meshy/image-to-3d', { method:'POST',
+                headers:{ 'content-type':'application/json' }, body:JSON.stringify({ image_url: info.image }) }).then(r=>r.json());
+              const tid=cr && cr.result;
+              if(!tid) throw new Error((cr&&cr.error&&cr.error.message)||'작업 생성 실패');
+              let glb=null;
+              for(let i=0;i<70;i++){
+                await new Promise(rs=>setTimeout(rs, 5000));
+                const st=await fetch(DEFAULT_PROXY+'/meshy/task/'+tid).then(r=>r.json());
+                if(st.status==='SUCCEEDED'){ glb=st.model_urls && st.model_urls.glb; break; }
+                if(st.status==='FAILED'||st.status==='CANCELED') throw new Error((st.task_error&&st.task_error.message)||'변환 실패');
+                setAiBusy('mesh:'+(st.progress||0));
+              }
+              if(!glb) throw new Error('시간 초과');
+              setAddForm(fm=>({ ...fm, meshUrl: DEFAULT_PROXY+'/meshy/asset?url='+encodeURIComponent(glb), modelCode:null }));
+              setAiBusy(false); return;
+            }catch(e){ setAiErr('실물 3D 변환에 실패해 도형 방식으로 대신 만들어요 — '+String(e&&e.message||'').slice(0,100)); }
+          }
           setAiBusy('model');
           try{
-            const code=await aiBuildModel(info, aiKey.trim());
-            let okM=false;
-            try{ const fn=new Function('THREE','W','D','H','COLOR', code);
-              const g=fn(THREE, info.w, info.d, info.h, '#888888'); okM=!!(g&&g.isObject3D); }catch(err){ okM=false; }
-            if(!okM) throw new Error('생성된 코드가 실행되지 않았어요');
+            const compiles=(code)=>{ try{ const fn=new Function('THREE','W','D','H','COLOR', code);
+              const g=fn(THREE, info.w, info.d, info.h, '#888888'); return !!(g&&g.isObject3D); }catch(err){ return false; } };
+            let code=await aiBuildModel(info);
+            if(!compiles(code)){
+              code=await aiBuildModel({ ...info, desc:(info.desc||'')+' [주의: 직전 생성 코드가 실행 오류였음. 검증된 기본 지오메트리만으로 단순·확실하게 다시 작성]' });
+            }
+            if(!compiles(code)) throw new Error('생성된 코드가 두 번 모두 실행되지 않았어요');
             setAddForm(fm=>({ ...fm, modelCode:code }));
           }catch(e){ setAiErr('3D 모델 생성에 실패해 기본 형태로 진행돼요'+(e&&e.message?' — '+String(e.message).slice(0,120):'')); }
           setAiBusy(false); };
@@ -1522,41 +1606,36 @@ function App() {
               <Type v="title3" weight="bold">새 가구 추가</Type>
               <Type v="caption" color="var(--muted)" style={{marginTop:2}}>가구 판매 페이지 링크만 넣으면 AI가 치수 측정과 3D 모델 생성까지 알아서 해줘요.</Type>
               <div style={{ marginTop:14, background:'rgba(0,102,255,0.05)', border:'1px solid rgba(0,102,255,0.14)', borderRadius:14, padding:12 }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-                  <Type v="body2" weight="bold">🔗 판매 링크로 가구 만들기</Type>
-                  <button onClick={()=>setShowKey(v=>!v)} style={{ border:'none', cursor:'pointer', background:'rgba(0,102,255,0.08)',
-                    color:'var(--accent)', borderRadius:99, padding:'4px 10px', fontSize:11.5, fontWeight:700, fontFamily:'inherit' }}>
-                    연결 {aiReady?'✓':'설정'}</button>
-                </div>
-                {showKey && (
-                  <div style={{ marginTop:8 }}>
-                    <input value={proxyUrl} onChange={e=>setProxyUrl(e.target.value)} inputMode="url"
-                      placeholder="프록시 URL (권장, 키 불필요) — https://….workers.dev" style={inputSt} />
-                    <input type="password" value={aiKey} onChange={e=>setAiKey(e.target.value)}
-                      placeholder="또는 내 Anthropic API 키 (sk-ant-…)" style={{...inputSt, marginTop:6}} />
-                    <Type v="caption" color="var(--muted)" style={{marginTop:4}}>프록시 URL이 있으면 API 키 없이 사용돼요 — 키는 서버에만 보관되어 사용자에게 노출되지 않아요. 배포 방법은 proxy/README.md 참고. 직접 키를 넣는 경우 이 브라우저에만 저장됩니다.</Type>
-                  </div>
-                )}
+                <Type v="body2" weight="bold">🔗 판매 링크로 가구 만들기</Type>
                 <div style={{ display:'flex', gap:8, marginTop:8 }}>
                   <input value={aiUrl} onChange={e=>setAiUrl(e.target.value)} inputMode="url"
                     placeholder="https:// 가구 판매 페이지 주소" style={{...inputSt, flex:1, minWidth:0}} />
-                  <Btn size="small" full={false} disabled={!!aiBusy||!aiUrl.trim()||!aiReady} onClick={runAi}
-                    style={{whiteSpace:'nowrap', padding:'10px 14px'}}>{aiBusy==='fetch'?'페이지 분석 중…':aiBusy==='model'?'3D 생성 중…':'만들기'}</Btn>
+                  <Btn size="small" full={false} disabled={!!aiBusy||!aiUrl.trim()} onClick={runAi}
+                    style={{whiteSpace:'nowrap', padding:'10px 14px'}}>{aiBusy==='fetch'?'페이지 분석 중…':aiBusy?'3D 생성 중…':'만들기'}</Btn>
                 </div>
                 {aiErr && <Type v="caption" color="var(--neg)" style={{marginTop:6}}>{aiErr}</Type>}
-                {!aiReady && !showKey && <Type v="caption" color="var(--muted)" style={{marginTop:6}}>사용하려면 "연결 설정"에서 프록시 URL(권장) 또는 API 키를 한 번만 입력하세요.</Type>}
+                {aiNeedName && (
+                  <div style={{ display:'flex', gap:8, marginTop:8 }}>
+                    <input value={aiName} onChange={e=>setAiName(e.target.value)}
+                      placeholder="상품명 붙여넣기 (판매 페이지의 제품 이름)" style={{...inputSt, flex:1, minWidth:0}} />
+                    <Btn size="small" full={false} disabled={!!aiBusy||!aiName.trim()} onClick={runAi}
+                      style={{whiteSpace:'nowrap', padding:'10px 14px'}}>{aiBusy?'생성 중…':'상품명으로 만들기'}</Btn>
+                  </div>
+                )}
               </div>
               {canAdd ? (
                 <div style={{ marginTop:12, border:'1px solid rgba(17,24,39,.06)', borderRadius:16, overflow:'hidden', boxShadow:'var(--card)' }}>
                   <div style={{ background:'#f6f7f9' }}>
-                    <Furniture3D kind={cur[0]} code={addForm.modelCode||null} w={W} d={D} h={Hh} hex={cur[3]} height={170} />
+                    <Furniture3D kind={cur[0]} code={addForm.modelCode||null} mesh={addForm.meshUrl||null} w={W} d={D} h={Hh} hex={cur[3]} height={170} />
                   </div>
                   <div style={{ padding:'12px 14px' }}>
                     <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                       <Badge size="xsmall" color={cur[3]} bg={cur[3]+'1A'}>{cur[2]}</Badge>
-                      {addForm.modelCode
-                        ? <Badge size="xsmall" color="var(--pos)" bg="rgba(0,191,64,0.1)">AI 3D 모델</Badge>
-                        : <Badge size="xsmall" color="var(--muted)" bg="rgba(0,0,0,0.05)">기본 형태</Badge>}
+                      {addForm.meshUrl
+                        ? <Badge size="xsmall" color="var(--pos)" bg="rgba(0,191,64,0.1)">실물 3D (Meshy)</Badge>
+                        : addForm.modelCode
+                          ? <Badge size="xsmall" color="var(--pos)" bg="rgba(0,191,64,0.1)">AI 3D 모델</Badge>
+                          : <Badge size="xsmall" color="var(--muted)" bg="rgba(0,0,0,0.05)">기본 형태</Badge>}
                     </div>
                     <Type v="body" weight="bold" style={{marginTop:6}}>{addForm.name}</Type>
                     <Type v="caption" color="var(--muted)" style={{marginTop:2}}>W{addForm.w} × D{addForm.d} × H{addForm.h}cm{Number(addForm.price)>0?' · '+won(Number(addForm.price)):''}</Type>
@@ -1568,7 +1647,9 @@ function App() {
                   borderRadius:16, border:'1px dashed rgba(17,24,39,0.12)' }}>
                   <div style={{ fontSize:26, marginBottom:6 }}>{aiBusy?'⏳':'🛒'}</div>
                   <Type v="body2" weight="bold" color="var(--muted)">
-                    {aiBusy==='fetch'?'판매 페이지를 분석하고 있어요…':aiBusy==='model'?'실물을 닮은 3D 모델을 만들고 있어요…':'위에 판매 링크를 넣으면 AI가 이름·치수·3D 모델을 만들어줘요'}</Type>
+                    {aiBusy==='fetch'?'판매 페이지를 분석하고 있어요…'
+                      :String(aiBusy).indexOf('mesh')===0?('상품 사진을 실물 3D로 변환하고 있어요… '+(String(aiBusy).split(':')[1]||'0')+'% (보통 1~3분)')
+                      :aiBusy==='model'?'실물을 닮은 3D 모델을 만들고 있어요…':'위에 판매 링크를 넣으면 AI가 이름·치수·3D 모델을 만들어줘요'}</Type>
                 </div>
               )}
               <div style={{ display:'flex', gap:10, marginTop:16 }}>
@@ -1627,7 +1708,7 @@ function App() {
 
   if (screen==='place') {
     const selCx = clampedPos + effW/2, selCz = posYc + effD/2;
-    const ghosts = placements.map(p=>({ key:p.key, kind:p.kind||KIND[p.id]||'box', modelCode:p.modelCode||null, w:p.w??p.effW, d:p.d??p.effD, h:p.h??80, rot:p.rot??0,
+    const ghosts = placements.map(p=>({ key:p.key, kind:p.kind||KIND[p.id]||'box', modelCode:p.modelCode||null, meshUrl:p.meshUrl||null, w:p.w??p.effW, d:p.d??p.effD, h:p.h??80, rot:p.rot??0,
       cx:(p.posX + p.effW/2), cz:((p.posY??0) + p.effD/2), color:p.fg }));
     return (
       <Device footer={
@@ -1644,7 +1725,7 @@ function App() {
           </div>
           <div style={{display:'flex', gap:10}}>
           <Btn disabled={!fits} onClick={()=>S(p=>({
-              placements:[...p.placements,{key:Date.now(),id:sel.id,kind:sel.kind||KIND[sel.id]||'box',modelCode:sel.modelCode||null,name:sel.name,fg:sel.fg,price:sel.price,
+              placements:[...p.placements,{key:Date.now(),id:sel.id,kind:sel.kind||KIND[sel.id]||'box',modelCode:sel.modelCode||null,meshUrl:sel.meshUrl||null,name:sel.name,fg:sel.fg,price:sel.price,
                 posX:clampedPos,posY:posYc,w:sel.w,d:sel.d,h:sel.h,rot:p.rotDeg||0,effW,effD,gap:Math.round(gap)}],
               screen:'saved', shared:false }))} style={{flex:1}}>이 배치 저장</Btn>
           </div>
@@ -1652,7 +1733,7 @@ function App() {
         <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)', background:'#F2F2F7' }}>
           <RoomViewer3D outline={roomPolyCm.map(([x,z])=>[x/100,z/100])}
             door={isPoly?null:{x0:(roomW-DOOR)/100, x1:roomW/100, z:roomD/100, r:DOOR/100}}
-            sel={{ id:sel.id, kind:sel.kind||KIND[sel.id]||'box', modelCode:sel.modelCode||null, w:sel.w, d:sel.d, h:sel.h, color:sel.fg }}
+            sel={{ id:sel.id, kind:sel.kind||KIND[sel.id]||'box', modelCode:sel.modelCode||null, meshUrl:sel.meshUrl||null, w:sel.w, d:sel.d, h:sel.h, color:sel.fg }}
             selCx={selCx} selCz={selCz} selRot={rotDeg||0} fits={fits} ghosts={ghosts}
             mode={st.viewMode}
             onDrag={(cx,cz)=>S({ posX: Math.round(cx-effW/2), posY: Math.round(cz-effD/2) })} />
@@ -1745,7 +1826,7 @@ function App() {
                       <RoomViewer3D outline={roomPolyCm.map(([x,z])=>[x/100,z/100])}
                         door={isPoly?null:{x0:(roomW-DOOR)/100, x1:roomW/100, z:roomD/100, r:DOOR/100}}
                         sel={null} selCx={0} selCz={0} selRot={0} fits={true} mode="3d" onDrag={()=>{}}
-                        ghosts={placements.map(p=>({ key:p.key, kind:p.kind||KIND[p.id]||'box', modelCode:p.modelCode||null, w:p.w??p.effW, d:p.d??p.effD, h:p.h??80, rot:p.rot??0,
+                        ghosts={placements.map(p=>({ key:p.key, kind:p.kind||KIND[p.id]||'box', modelCode:p.modelCode||null, meshUrl:p.meshUrl||null, w:p.w??p.effW, d:p.d??p.effD, h:p.h??80, rot:p.rot??0,
                           cx:(p.posX + p.effW/2), cz:((p.posY??0) + p.effD/2), color:p.fg, solid:true }))} />
                     </div>
                     <Type v="caption" color="var(--muted)" style={{marginTop:8, textAlign:'center'}}>빈 곳 드래그 = 시점 회전 · 스크롤 = 확대/축소</Type>
