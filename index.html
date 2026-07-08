@@ -45,6 +45,8 @@
   input[type=range]::-moz-range-thumb{ width:24px; height:24px; border-radius:50%; background:#fff; border:2px solid var(--accent); cursor:pointer; }
   @keyframes scanpulse { 0%,100%{opacity:.35} 50%{opacity:.9} }
   @keyframes sweep { 0%{transform:translateY(-100%)} 100%{transform:translateY(500%)} }
+  .no-sb{ scrollbar-width:none; -ms-overflow-style:none; }
+  .no-sb::-webkit-scrollbar{ display:none; width:0; height:0; }
 </style>
 </head>
 <body>
@@ -908,7 +910,7 @@ function PolygonMeasure({ onDone, onBack }){
           <div style={{ fontSize:18, fontWeight:800, color:PM_C.ink, marginTop:2 }}>다각형 방 측정</div>
           <div style={{ fontSize:12.5, color:PM_C.soft, marginTop:1 }}>격자를 탭해 방 모서리마다 측점을 찍고, 첫 점을 다시 탭하면 닫혀요.</div>
         </div>
-        <div style={{ display:'flex', gap:6, overflowX:'auto', padding:'0 16px 8px', alignItems:'center' }}>
+        <div className="no-sb" style={{ display:'flex', gap:6, overflowX:'auto', padding:'0 16px 8px', alignItems:'center' }}>
           <span style={{ flexShrink:0, fontSize:11.5, fontWeight:700, color:PM_C.soft, marginRight:2 }}>방 크기 예시</span>
           {PM_EXAMPLES.map(ex=>(
             <button key={ex.n} onClick={()=>loadPreset(ex.pts)} style={{ flexShrink:0, fontFamily:'inherit', fontSize:12,
