@@ -687,6 +687,155 @@ function _pmSnap(raw, prev, on){ let p={x:Math.round(raw.x/0.1)*0.1, z:Math.roun
   return p; }
 const PM_PYEONG=3.305785, PM_C={ page:'#E7EAE3', paper:'#F0EFE8', ink:'#26313A', soft:'#5C6A66', hair:'rgba(38,49,58,0.22)', blue:'#2B50C8', red:'#B23A2A', green:'#5E7D62' };
 
+/* ─── project coplanar marker 3D positions → 2D floor outline (Newell + plane basis) ─── */
+const _cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const _dot3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const _norm3=a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2]/l]; };
+function _polyFromPositions(P){ // P: [[x,y,z],...] ordered around polygon → [[x,z],...] same units
+  const c=P.reduce((a,p)=>[a[0]+p[0],a[1]+p[1],a[2]+p[2]],[0,0,0]).map(v=>v/P.length);
+  let n=[0,0,0];
+  for(let i=0;i<P.length;i++){ const a=P[i], b=P[(i+1)%P.length];
+    n[0]+=(a[1]-b[1])*(a[2]+b[2]); n[1]+=(a[2]-b[2])*(a[0]+b[0]); n[2]+=(a[0]-b[0])*(a[1]+b[1]); }
+  n=_norm3(n);
+  const ref=Math.abs(n[1])<0.9?[0,1,0]:[1,0,0];
+  const u=_norm3(_cross(n,ref)), v=_cross(n,u);
+  let pts=P.map(p=>{ const d=[p[0]-c[0],p[1]-c[1],p[2]-c[2]]; return [_dot3(d,u), _dot3(d,v)]; });
+  let s=0; for(let i=0;i<pts.length;i++){ const a=pts[i], b=pts[(i+1)%pts.length]; s+=a[0]*b[1]-b[0]*a[1]; }
+  if(s<0) pts=pts.map(p=>[p[0],-p[1]]);
+  return pts;
+}
+
+/* ─── marker-based polygon room scan: markers at each corner → floor outline ─── */
+const POLY_NEED = 10;
+function PolygonScanScreen({ onDone, onBack, onManual }){
+  const videoRef=useRef(null), canvasRef=useRef(null);
+  const rafRef=useRef(0), streamRef=useRef(null), doneRef=useRef(false);
+  const samples=useRef({}), fBuf=useRef([]);
+  const [count,setCount]=useState(4);
+  const countRef=useRef(4);
+  const [err,setErr]=useState(null);
+  const [ui,setUi]=useState({ seen:[], progress:0, ready:false, area:null });
+  useEffect(()=>{ countRef.current=count; samples.current={}; doneRef.current=false; setUi(u=>({...u,progress:0,ready:false,area:null})); },[count]);
+  const printMarkers=()=>{ if(typeof AR==='undefined'||!AR.Dictionary){ alert('마커 라이브러리 로드 실패'); return; }
+    const dict=new AR.Dictionary(DICT); const boxMM=Math.round(MARKER_MM*10/8); const blocks=[];
+    for(let i=0;i<count;i++) blocks.push(`<div style="page-break-after:always;text-align:center;padding-top:40px;font-family:sans-serif"><div style="width:${boxMM}mm;height:${boxMM}mm;margin:0 auto">${dict.generateSVG(i)}</div><div style="margin-top:8mm;font-size:20pt;font-weight:700">모서리 ${i+1} (ID ${i})</div><div style="margin-top:2mm;font-size:11pt;color:#555">검은 마커 한 변 ${MARKER_MM}mm · A4 배율 100%</div></div>`);
+    const w=window.open('','_blank'); if(!w){ alert('팝업을 허용해 주세요'); return; }
+    w.document.write('<html><head><title>다각형 마커</title></head><body>'+blocks.join('')+'</body></html>'); w.document.close();
+    setTimeout(()=>{ w.focus(); w.print(); },300);
+  };
+  useEffect(()=>{
+    let stopped=false;
+    if(typeof AR==='undefined'||typeof POS==='undefined'){ setErr('lib'); return; }
+    const detector=new AR.Detector({dictionaryName:DICT});
+    const canvas=canvasRef.current, ctx=canvas.getContext('2d'); canvas.width=CW; canvas.height=CH;
+    const cx=CW/2, cy=CH/2;
+    let calF=0; try{ calF=Number(localStorage.getItem('rt_calManualF'))||0; }catch(e){}
+    let posit=new POS.Posit(MARKER_MM, calF||CW), lastF=calF||CW;
+    navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false})
+      .then(stream=>{ if(stopped){stream.getTracks().forEach(t=>t.stop());return;} streamRef.current=stream; const v=videoRef.current; v.srcObject=stream; v.play(); rafRef.current=requestAnimationFrame(loop); })
+      .catch(()=>setErr('perm'));
+    function coverDraw(v){ const vw=v.videoWidth,vh=v.videoHeight; if(!vw||!vh)return false; const s=Math.max(CW/vw,CH/vh),sw=CW/s,sh=CH/s; ctx.drawImage(v,(vw-sw)/2,(vh-sh)/2,sw,sh,0,0,CW,CH); return true; }
+    function median(a){ const s=[...a].sort((x,y)=>x-y); return s[s.length>>1]; }
+    function medVec(list){ const at=i=>{const s=list.map(v=>v[i]).sort((a,b)=>a-b);return s[s.length>>1];}; return [at(0),at(1),at(2)]; }
+    function loop(){
+      rafRef.current=requestAnimationFrame(loop);
+      const v=videoRef.current; if(!v||v.readyState!==v.HAVE_ENOUGH_DATA)return; if(!coverDraw(v))return;
+      const img=ctx.getImageData(0,0,CW,CH); const markers=detector.detect(img); const N=countRef.current; const seen=[];
+      for(const m of markers){ if(m.id<0||m.id>=N)continue; seen.push(m.id);
+        ctx.lineWidth=3; ctx.strokeStyle='#3DFF7E'; ctx.beginPath(); m.corners.forEach((c,j)=>{const q=m.corners[(j+1)%4];ctx.moveTo(c.x,c.y);ctx.lineTo(q.x,q.y);}); ctx.stroke();
+        ctx.fillStyle='#3DFF7E'; ctx.font='bold 20px sans-serif'; ctx.fillText(String(m.id+1), m.corners[0].x, m.corners[0].y-6);
+        for(const f of focalsFromMarker(m.corners,cx,cy)) if(f>CW*0.3&&f<CW*6){ fBuf.current.push(f); if(fBuf.current.length>60)fBuf.current.shift(); }
+      }
+      const fAuto=(!calF && fBuf.current.length>=10)?median(fBuf.current):null;
+      const effF=calF||fAuto||CW;
+      if(Math.abs(effF-lastF)/lastF>0.01){ posit=new POS.Posit(MARKER_MM,effF); lastF=effF; }
+      for(const m of markers){ if(m.id<0||m.id>=N)continue; const cs=m.corners.map(c=>({x:c.x-cx,y:cy-c.y})); const pose=posit.pose(cs);
+        if(pose&&pose.bestTranslation){ if(!samples.current[m.id])samples.current[m.id]=[]; const buf=samples.current[m.id]; buf.push(pose.bestTranslation); if(buf.length>POLY_NEED*2)buf.shift(); } }
+      const haveAll=[...Array(N).keys()].every(i=>samples.current[i]&&samples.current[i].length>0);
+      const filled=[...Array(N).keys()].reduce((a,i)=>a+Math.min((samples.current[i]||[]).length,POLY_NEED),0);
+      const progress=Math.round(filled/(POLY_NEED*N)*100);
+      let area=null;
+      if(haveAll){ const P=[...Array(N).keys()].map(i=>medVec(samples.current[i])); const poly2=_polyFromPositions(P);
+        let s=0; for(let i=0;i<poly2.length;i++){ const a=poly2[i], b=poly2[(i+1)%poly2.length]; s+=a[0]*b[1]-b[0]*a[1]; } area=Math.abs(s)/2/1e6; }
+      const ready=progress>=100 && haveAll && (calF>0||fAuto!=null);
+      if(ready&&!doneRef.current)doneRef.current=true;
+      setUi({ seen, progress, ready, area });
+    }
+    return ()=>{ stopped=true; cancelAnimationFrame(rafRef.current); if(streamRef.current)streamRef.current.getTracks().forEach(t=>t.stop()); };
+  },[]);
+  const finish=()=>{ const N=count; if(![...Array(N).keys()].every(i=>samples.current[i]&&samples.current[i].length))return;
+    const medVec=list=>{const at=i=>{const s=list.map(v=>v[i]).sort((a,b)=>a-b);return s[s.length>>1];};return [at(0),at(1),at(2)];};
+    const P=[...Array(N).keys()].map(i=>medVec(samples.current[i])); const poly2=_polyFromPositions(P);
+    const xs=poly2.map(p=>p[0]), zs=poly2.map(p=>p[1]); const minX=Math.min(...xs), minZ=Math.min(...zs);
+    const outlineCm=poly2.map(p=>[Math.round((p[0]-minX)/10), Math.round((p[1]-minZ)/10)]);
+    const bboxW=Math.round((Math.max(...xs)-minX)/10), bboxD=Math.round((Math.max(...zs)-minZ)/10);
+    onDone(outlineCm, bboxW, bboxD); };
+  const seenSet=new Set(ui.seen);
+  return (
+    <Device dark footer={
+      err ? <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          <Btn onClick={onManual}>직접 그리기로 측정</Btn>
+          <Btn variant="ghost" onClick={onBack}>뒤로</Btn>
+        </div>
+      : <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          <Btn disabled={!ui.ready} onClick={finish}>{ui.ready?`이 방으로 시작${ui.area!=null?` · ${ui.area.toFixed(1)}㎡`:''}`:`모서리 ${count}개 마커를 모두 비춰주세요`}</Btn>
+          <Btn variant="ghost" onClick={onManual}>카메라 없이 직접 그리기</Btn>
+        </div>}>
+      <div style={{ position:'relative', height:'100%', marginTop:'calc(-1 * var(--sb))', paddingTop:'var(--sb)', background:'#0a0d12' }}>
+        <video ref={videoRef} playsInline muted style={{ display:'none' }} />
+        <canvas ref={canvasRef} style={{ position:'absolute', inset:'var(--sb) 0 0', width:'100%', height:'calc(100% - var(--sb))', objectFit:'cover', background:'#0a0d12' }} />
+        {err && (
+          <div style={{ position:'absolute', inset:'var(--sb) 20px 0', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', textAlign:'center', gap:10 }}>
+            <div style={{ fontSize:40 }}>📷</div>
+            <Type v="title3" weight="bold" color="#fff">{err==='lib'?'마커 라이브러리 로드 실패':'카메라를 사용할 수 없어요'}</Type>
+            <Type v="body2" color="rgba(255,255,255,0.7)">직접 그리기로 측정하거나, https/localhost에서 카메라 권한을 허용해 주세요.</Type>
+          </div>
+        )}
+        {!err && (
+          <Fragment>
+            <div style={{ position:'absolute', top:'calc(var(--sb) + 10px)', left:12, right:12, zIndex:6, display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:6, background:'rgba(255,255,255,0.14)', backdropFilter:'blur(10px)', borderRadius:99, padding:'5px 8px' }}>
+                <Type v="caption" weight="bold" color="#fff">모서리</Type>
+                {[4,5,6,7,8].map(k=>(
+                  <button key={k} onClick={()=>setCount(k)} style={{ border:'none', cursor:'pointer', width:26, height:26, borderRadius:'50%',
+                    background:count===k?'#3DFF7E':'rgba(255,255,255,0.12)', color:count===k?'#0a0d12':'#fff', fontWeight:800, fontSize:13 }}>{k}</button>
+                ))}
+              </div>
+              <button onClick={printMarkers} style={{ border:'none', cursor:'pointer', background:'rgba(255,255,255,0.16)', backdropFilter:'blur(10px)',
+                color:'#fff', borderRadius:99, padding:'7px 12px', fontSize:12, fontWeight:700, fontFamily:'inherit' }}>마커 인쇄</button>
+            </div>
+            <div style={{ position:'absolute', top:'calc(var(--sb) + 52px)', left:0, right:0, display:'flex', justifyContent:'center', gap:6, flexWrap:'wrap', padding:'0 16px' }}>
+              {[...Array(count).keys()].map(i=>{ const on=seenSet.has(i); return (
+                <div key={i} style={{ width:24, height:24, borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
+                  background:on?'#3DFF7E':'rgba(255,255,255,0.12)', color:on?'#0a0d12':'#fff', fontWeight:700, fontSize:12 }}>{i+1}</div>
+              ); })}
+            </div>
+            {ui.area!=null && (
+              <div style={{ position:'absolute', top:'calc(var(--sb) + 90px)', left:0, right:0, textAlign:'center' }}>
+                <div style={{ display:'inline-block', background:'rgba(0,0,0,0.45)', backdropFilter:'blur(8px)', borderRadius:12, padding:'8px 16px' }}>
+                  <Type v="title3" weight="bold" color="#fff">{ui.area.toFixed(1)} ㎡</Type></div>
+              </div>
+            )}
+            <div style={{ position:'absolute', left:0, right:0, bottom:20, padding:'0 24px', textAlign:'center' }}>
+              <div style={{ display:'inline-flex', alignItems:'center', gap:8, background:'rgba(255,255,255,0.12)', backdropFilter:'blur(10px)', borderRadius:99, padding:'8px 16px', marginBottom:14 }}>
+                <span style={{ width:8, height:8, borderRadius:'50%', background:ui.ready?'#3DFF7E':'#FFC53D' }} />
+                <Type v="body2" weight="bold" color="#fff">{ui.ready?'측정 완료 — 안정화됨':(ui.seen.length<count?'각 모서리 마커를 한 화면에 담아주세요':'가만히 들고 잠시 기다려주세요')}</Type>
+              </div>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+                <Type v="body2" color="rgba(255,255,255,0.7)">마커 {ui.seen.length}/{count} 인식</Type>
+                <Type v="body2" weight="bold" color="#fff">{ui.progress}%</Type>
+              </div>
+              <div style={{ height:6, borderRadius:99, background:'rgba(255,255,255,0.15)', overflow:'hidden' }}>
+                <div style={{ height:'100%', width:ui.progress+'%', background:'#3DFF7E', borderRadius:99, transition:'width .12s' }} />
+              </div>
+            </div>
+          </Fragment>
+        )}
+      </div>
+    </Device>
+  );
+}
+
 /* ─── polygon room measurement (tap points → outline, area, calibration) ─── */
 function PolygonMeasure({ onDone, onBack }){
   const [points,setPoints]=useState([]);
@@ -999,7 +1148,7 @@ function App() {
     <Device footer={<div style={{display:'flex',flexDirection:'column',gap:8}}>
         <Btn onClick={()=>go('marker')}>시작하기</Btn>
         <Btn variant="ghost" onClick={()=>go('manual')}>마커 없이 치수 직접 입력</Btn>
-        <Btn variant="ghost" onClick={()=>go('polygon')}>다각형 방 그리기</Btn>
+        <Btn variant="ghost" onClick={()=>go('polyscan')}>다각형 방 마커 측정</Btn>
       </div>}>
       <Scroll>
         <div style={{ padding:'24px 0 8px' }}>
@@ -1044,8 +1193,14 @@ function App() {
         posX:Math.round(w/2), posY:Math.round(d/2), screen:'result' })} />
   );
 
+  if (screen==='polyscan') return (
+    <PolygonScanScreen onBack={()=>go('intro')} onManual={()=>go('polygon')}
+      onDone={(outlineCm, bboxW, bboxD)=>S({ roomOutline:outlineCm, measuredW:bboxW, measuredD:bboxD,
+        accuracy:null, source:'polygon', posX:Math.round(bboxW/2), posY:Math.round(bboxD/2), screen:'result' })} />
+  );
+
   if (screen==='polygon') return (
-    <PolygonMeasure onBack={()=>go('intro')}
+    <PolygonMeasure onBack={()=>go('polyscan')}
       onDone={(outlineCm, bboxW, bboxD)=>S({ roomOutline:outlineCm, measuredW:bboxW, measuredD:bboxD,
         accuracy:null, source:'polygon', posX:Math.round(bboxW/2), posY:Math.round(bboxD/2), screen:'result' })} />
   );
