@@ -1053,10 +1053,17 @@ function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, 
       const [x1,z1]=outline[i], [x2,z2]=outline[(i+1)%outline.length];
       const len=Math.hypot(x2-x1,z2-z1);
       const geo=new THREE.BoxGeometry(len+wallT, wallH, wallT); geo.translate(0,wallH/2,0);
-      const wall=new THREE.Mesh(geo, wallMat); wall.position.set((x1+x2)/2,0,(z1+z2)/2);
+      const mat=wallMat.clone();
+      const mx=(x1+x2)/2, mz=(z1+z2)/2;
+      const wall=new THREE.Mesh(geo, mat); wall.position.set(mx,0,mz);
       wall.rotation.y=-Math.atan2(z2-z1,x2-x1); wall.castShadow=true; wall.receiveShadow=true;
-      wall.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), wallEdgeMat));
-      wall.userData.lerp=0.06+i*0.013; wall.scale.y=0.012; scene.add(wall); walls.push(wall);
+      const eMat=wallEdgeMat.clone();
+      wall.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), eMat));
+      // outward normal in XZ (perpendicular to edge, pointing away from room center)
+      let nx=-(z2-z1), nz=(x2-x1); const nl=Math.hypot(nx,nz)||1; nx/=nl; nz/=nl;
+      if(nx*(mx-cx)+nz*(mz-cz)<0){ nx=-nx; nz=-nz; }
+      wall.userData={ lerp:0.06+i*0.013, nx, nz, mx, mz, mat, eMat, baseOp:0.96, curOp:0.96 };
+      wall.scale.y=0.012; scene.add(wall); walls.push(wall);
     }
     if(door){ const dx0=door.x0, dz=door.z, dr=door.r;
       const strip=new THREE.Mesh(new THREE.PlaneGeometry(door.x1-door.x0, wallT*2.2), new THREE.MeshBasicMaterial({color:0x2B50C8, transparent:true, opacity:0.55, side:THREE.DoubleSide}));
@@ -1103,7 +1110,11 @@ function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, 
       if(S.mode!==lastMode){ lastMode=S.mode; const p=S.mode==='plan'?PLAN:V3D; goal.theta=p.theta; goal.phi=p.phi; goal.radius=p.radius; extGoal=S.mode==='plan'?0.012:1; }
       camS.theta+=(goal.theta-camS.theta)*0.08; camS.phi+=(goal.phi-camS.phi)*0.08; camS.radius+=(goal.radius-camS.radius)*0.08;
       camera.position.set(target.x+camS.radius*Math.sin(camS.phi)*Math.sin(camS.theta), target.y+camS.radius*Math.cos(camS.phi), target.z+camS.radius*Math.sin(camS.phi)*Math.cos(camS.theta)); camera.lookAt(target);
-      let ext=0; walls.forEach(w=>{ w.scale.y+=(extGoal-w.scale.y)*w.userData.lerp; ext+=w.scale.y; }); ext/=walls.length;
+      let ext=0; walls.forEach(w=>{ w.scale.y+=(extGoal-w.scale.y)*w.userData.lerp; ext+=w.scale.y;
+        const u=w.userData; const near=(u.nx*(camera.position.x-u.mx)+u.nz*(camera.position.z-u.mz))>0;
+        const tOp=(S.mode==='3d'&&near)?0:u.baseOp; u.curOp+=(tOp-u.curOp)*0.16;
+        u.mat.opacity=u.curOp; u.eMat.opacity=0.5*(u.curOp/u.baseOp); w.castShadow=u.curOp>0.5;
+      }); ext/=walls.length;
       amb.intensity=0.9-0.3*ext; dir.intensity=0.2+0.55*ext; dimW.material.opacity=0.35+0.65*(1-ext); dimH.material.opacity=0.35+0.65*(1-ext);
       selMesh.scale.y+=((S.mode==='3d'?1:0.06)-selMesh.scale.y)*0.09;
       ghostMeshes.forEach(gm=>{ gm.scale.y+=((S.mode==='3d'?1:0.06)-gm.scale.y)*0.09; });
