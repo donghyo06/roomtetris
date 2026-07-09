@@ -37,7 +37,7 @@
   /* phone: fill the real screen, hide fake chrome, respect safe areas */
   @media (max-width:480px){
     body{ padding:0; align-items:stretch; justify-content:stretch; }
-    :root{ --sb: env(safe-area-inset-top, 0px); }
+    :root{ --sb: max(env(safe-area-inset-top, 0px), 44px); }
     .rt-device{ width:100vw; height:100vh; height:100dvh; border-radius:0; box-shadow:none; }
     .rt-island, .rt-home, .rt-statusbar{ display:none; }
     .rt-footer{ padding-bottom: calc(30px + env(safe-area-inset-bottom, 0px)) !important; }
@@ -1240,14 +1240,24 @@ function RoomViewer3D({ outline, door, sel, selCx, selCz, selRot, fits, ghosts, 
     const clamp=(x,z)=>{ const rr=(stateRef.current.selRot||0)*Math.PI/180, cA=Math.abs(Math.cos(rr)), sA=Math.abs(Math.sin(rr));
       const ew=(sel.w*cA+sel.d*sA)/100, ed=(sel.w*sA+sel.d*cA)/100;
       return { x:Math.min(maxX-ew/2, Math.max(minX+ew/2,x)), z:Math.min(maxZ-ed/2, Math.max(minZ+ed/2,z)) }; };
-    const onDown=e=>{ setNDC(e); ray.setFromCamera(ndc,camera); const h=ray.intersectObjects([selMesh,padGrp],true);
+    const ptrs=new Map(); let pinchDist=0, pinchRadius=0;
+    const onDown=e=>{ ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+      if(ptrs.size>=2){ dragging=false; orbiting=false; const a=[...ptrs.values()];
+        pinchDist=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)||1; pinchRadius=camS.radius; el.style.cursor='default';
+        try{el.setPointerCapture(e.pointerId);}catch(_){} return; }
+      setNDC(e); ray.setFromCamera(ndc,camera); const h=ray.intersectObjects([selMesh,padGrp],true);
       if(h.length>0){ dragging=true; if(ray.ray.intersectPlane(fp,hit)) dragOff={x:selMesh.position.x-hit.x, z:selMesh.position.z-hit.z}; el.style.cursor='grabbing'; }
       else if(stateRef.current.mode==='3d'){ orbiting=true; el.style.cursor='grabbing'; }
       lastX=e.clientX; lastY=e.clientY; try{el.setPointerCapture(e.pointerId);}catch(_){} };
-    const onMove=e=>{ if(dragging){ setNDC(e); ray.setFromCamera(ndc,camera); if(ray.ray.intersectPlane(fp,hit)){ const c=clamp(hit.x+dragOff.x, hit.z+dragOff.z); selMesh.position.x=c.x; selMesh.position.z=c.z; stateRef.current.onDrag(Math.round(c.x*100), Math.round(c.z*100)); } }
+    const onMove=e=>{ if(ptrs.has(e.pointerId)) ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+      if(ptrs.size>=2){ const a=[...ptrs.values()]; const d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)||1;
+        camS.radius=Math.min(span*3.4, Math.max(span*0.7, pinchRadius*pinchDist/d)); goal.radius=camS.radius; return; }
+      if(dragging){ setNDC(e); ray.setFromCamera(ndc,camera); if(ray.ray.intersectPlane(fp,hit)){ const c=clamp(hit.x+dragOff.x, hit.z+dragOff.z); selMesh.position.x=c.x; selMesh.position.z=c.z; stateRef.current.onDrag(Math.round(c.x*100), Math.round(c.z*100)); } }
       else if(orbiting){ const dx=e.clientX-lastX, dy=e.clientY-lastY; camS.theta-=dx*0.005; camS.phi=Math.min(1.4,Math.max(0.08,camS.phi-dy*0.005)); goal.theta=camS.theta; goal.phi=camS.phi; }
       lastX=e.clientX; lastY=e.clientY; };
-    const onUp=()=>{ dragging=false; orbiting=false; el.style.cursor='grab'; };
+    const onUp=e=>{ if(e&&e.pointerId!=null) ptrs.delete(e.pointerId);
+      if(ptrs.size<2){ pinchDist=0; const r=[...ptrs.values()][0]; if(r){ lastX=r.x; lastY=r.y; } }
+      if(ptrs.size===0){ dragging=false; orbiting=false; el.style.cursor='grab'; } };
     const onWheel=e=>{ e.preventDefault(); camS.radius=Math.min(span*3.4, Math.max(span*0.7, camS.radius*(1+e.deltaY*0.0012))); goal.radius=camS.radius; };
     el.addEventListener('pointerdown',onDown); el.addEventListener('pointermove',onMove); el.addEventListener('pointerup',onUp); el.addEventListener('pointercancel',onUp); el.addEventListener('wheel',onWheel,{passive:false});
     let raf;
