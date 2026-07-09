@@ -1575,10 +1575,10 @@ function App() {
             url:addForm.url||undefined, modelCode:addForm.modelCode||undefined, meshUrl:addForm.meshUrl||undefined };
           setCustomFurn(cs=>[...cs, item]); setShowAdd(false); setAiUrl(''); setAiErr(null); setAiName(''); setAiNeedName(false);
           setAddForm({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null, meshUrl:null });
-          // 공용 카탈로그에 등록 → 다른 사용자도 사용(실물 GLB가 있고 링크가 있을 때만; 중복은 백엔드가 무시)
-          if(_catBase() && item.meshUrl && item.url){
+          // 공용 카탈로그에 등록 → 다른 사용자도 사용(링크가 있으면; GLB 있으면 실물, 없으면 도형. 중복은 백엔드가 무시)
+          if(_catBase() && item.url){
             fetch(_catBase()+'/catalog', { method:'POST', headers:{ 'content-type':'application/json' },
-              body:JSON.stringify({ url:item.url, glbUrl:item.meshUrl, name:item.name, category:item.cat,
+              body:JSON.stringify({ url:item.url, glbUrl:item.meshUrl||undefined, name:item.name, category:item.cat,
                 w:item.w, d:item.d, h:item.h, color:item.fg, kind:item.kind, price:item.price }) }).catch(()=>{});
           } };
         const runAi=async()=>{
