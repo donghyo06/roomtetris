@@ -37,9 +37,9 @@
   /* phone: fill the real screen, hide fake chrome, respect safe areas */
   @media (max-width:480px){
     body{ padding:0; align-items:stretch; justify-content:stretch; }
-    :root{ --sb: max(env(safe-area-inset-top, 0px), 44px); }
+    :root{ --sb: max(env(safe-area-inset-top, 0px), 12px); }
     .rt-device{ width:100vw; height:100vh; height:100dvh; border-radius:0; box-shadow:none; }
-    .rt-island, .rt-home, .rt-statusbar{ display:none; }
+    .rt-island, .rt-home, .rt-statusbar{ display:none !important; }
     .rt-footer{ padding-bottom: calc(30px + env(safe-area-inset-bottom, 0px)) !important; }
   }
   input[type=range]{ -webkit-appearance:none; appearance:none; height:4px; border-radius:99px; background:#e5e7eb; outline:none; }
