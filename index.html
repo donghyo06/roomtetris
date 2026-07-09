@@ -1364,7 +1364,12 @@ function App() {
   const selPoly = _obbCorners(_mx, _mz, sel.w, sel.d, rotDeg||0);
   const collide = placements.find(p=>{ const pcx=p.posX+p.effW/2, pcz=(p.posY??0)+p.effD/2;
     return _polysOverlap(selPoly, _obbCorners(pcx, pcz, p.w??p.effW, p.d??p.effD, p.rot??0)); });
-  const _probes = selPoly.concat(selPoly.map((c,i)=>{ const q=selPoly[(i+1)%4]; return [(c[0]+q[0])/2,(c[1]+q[1])/2]; }), [[_mx,_mz]]);
+  const _probesRaw = selPoly.concat(selPoly.map((c,i)=>{ const q=selPoly[(i+1)%4]; return [(c[0]+q[0])/2,(c[1]+q[1])/2]; }), [[_mx,_mz]]);
+  // pull each probe slightly toward the furniture center so pieces flush against a wall
+  // (probe exactly on the polygon edge, where point-in-polygon is unstable) still count as inside
+  const _INSET = 1; // cm
+  const _probes = _probesRaw.map(([px,pz])=>{ const dx=_mx-px, dz=_mz-pz, d=Math.hypot(dx,dz)||1;
+    return [px + dx/d*_INSET, pz + dz/d*_INSET]; });
   const inRoom = _probes.every(([px,pz])=>_pointInPoly(px,pz, roomPolyCm));
   const doorRect = { x1:roomW-DOOR, x2:roomW, y1:roomD-DOOR, y2:roomD };
   const doorHit = !isPoly && _polysOverlap(selPoly,
