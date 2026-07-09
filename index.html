@@ -1313,7 +1313,7 @@ function App() {
   const [savedView, setSavedView] = useState('plan');
   const [customFurn, setCustomFurn] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null, meshUrl:null });
+  const [addForm, setAddForm] = useState({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null, meshUrl:null, meshRaw:null });
   const [aiUrl, setAiUrl] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [aiErr, setAiErr] = useState(null);
@@ -1572,19 +1572,19 @@ function App() {
         const submit=()=>{ if(!canAdd) return;
           const item={ id:'custom_'+Date.now(), name:addForm.name.trim(), cat:cur[2], w:Math.round(W), d:Math.round(D), h:Math.round(Hh),
             price:Math.max(0, Math.round(parseFloat(addForm.price)||0)), fg:cur[3], kind:cur[0], custom:true,
-            url:addForm.url||undefined, modelCode:addForm.modelCode||undefined, meshUrl:addForm.meshUrl||undefined };
+            url:addForm.url||undefined, modelCode:addForm.modelCode||undefined, meshUrl:addForm.meshUrl||undefined, meshRaw:addForm.meshRaw||undefined };
           setCustomFurn(cs=>[...cs, item]); setShowAdd(false); setAiUrl(''); setAiErr(null); setAiName(''); setAiNeedName(false);
-          setAddForm({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null, meshUrl:null });
+          setAddForm({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null, meshUrl:null, meshRaw:null });
           // 공용 카탈로그에 등록 → 다른 사용자도 사용(링크가 있으면; GLB 있으면 실물, 없으면 도형. 중복은 백엔드가 무시)
           if(_catBase() && item.url){
             fetch(_catBase()+'/catalog', { method:'POST', headers:{ 'content-type':'application/json' },
-              body:JSON.stringify({ url:item.url, glbUrl:item.meshUrl||undefined, name:item.name, category:item.cat,
+              body:JSON.stringify({ url:item.url, glbUrl:item.meshRaw||item.meshUrl||undefined, name:item.name, category:item.cat,
                 w:item.w, d:item.d, h:item.h, color:item.fg, kind:item.kind, price:item.price }) }).catch(()=>{});
           } };
         const runAi=async()=>{
           const u=aiUrl.trim(); if(!u||aiBusy) return;
           // 이미 공용 카탈로그에 있는 상품이면 재사용(생성 비용 0)
-          const dup=allFurn.find(f=>f.url && _prodKey(f.url)===_prodKey(u));
+          const dup=allFurn.find(f=>f.url && f.meshUrl && _prodKey(f.url)===_prodKey(u));
           if(dup){ const sh=shapes.find(x=>x[0]===dup.kind);
             setAddForm(fm=>({ ...fm, name:dup.name, shape:sh?sh[0]:fm.shape, w:String(dup.w), d:String(dup.d), h:String(dup.h),
               price:String(dup.price||0), url:u, meshUrl:dup.meshUrl||null, modelCode:dup.modelCode||null }));
@@ -1605,7 +1605,7 @@ function App() {
               w:w, d:d, h:h, price:Math.max(0,Math.round(Number(j.price)||0)),
               image:(typeof j.image==='string'&&j.image.indexOf('http')===0)?j.image:'', desc:String(j.desc||'') };
             setAddForm(fm=>({ ...fm, name:info.name, shape:info.shape, w:String(info.w), d:String(info.d), h:String(info.h),
-              price:String(info.price), url:u, modelCode:null, meshUrl:null }));
+              price:String(info.price), url:u, modelCode:null, meshUrl:null, meshRaw:null }));
           }catch(e){ setAiErr(e&&e.message?String(e.message).slice(0,180):'가져오기에 실패했어요'); setAiBusy(false); return; }
           // 비용 절감: 박스형 가구(테이블·선반·옷장)는 유료 실물 3D 생성을 건너뛰고 절차적 생성으로.
           // 소파·침대 등 형태가 복잡한 가구만 실물 3D를 만든다.
@@ -1626,7 +1626,7 @@ function App() {
                 setAiBusy('mesh:'+(st.progress||0));
               }
               if(!glb) throw new Error('시간 초과');
-              setAddForm(fm=>({ ...fm, meshUrl: DEFAULT_PROXY+'/meshy/asset?url='+encodeURIComponent(glb), modelCode:null }));
+              setAddForm(fm=>({ ...fm, meshUrl: DEFAULT_PROXY+'/meshy/asset?url='+encodeURIComponent(glb), meshRaw: glb, modelCode:null }));
               setAiBusy(false); return;
             }catch(e){ setAiErr('실물 3D 변환에 실패해 도형 방식으로 대신 만들어요 — '+String(e&&e.message||'').slice(0,100)); }
           }
