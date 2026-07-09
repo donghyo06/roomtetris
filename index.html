@@ -149,17 +149,7 @@ const H = ({ title, sub, dark }) => (
 );
 
 /* ─── furniture data + fit logic (ported verbatim from app-logic.dc.js) ─── */
-const FURN = [
-  { id:'sofa3', name:'3인 소파', cat:'소파', w:220, d:95, h:85, price:890000, fg:'#0066FF' },
-  { id:'sofa2', name:'2인 소파', cat:'소파', w:160, d:90, h:80, price:590000, fg:'#0066FF' },
-  { id:'bedQ', name:'퀸 침대', cat:'침대', w:163, d:203, h:100, price:1290000, fg:'#A44BE0' },
-  { id:'bedK', name:'킹 침대', cat:'침대', w:183, d:203, h:100, price:1590000, fg:'#A44BE0' },
-  { id:'bedSS', name:'슈퍼싱글 침대', cat:'침대', w:110, d:203, h:95, price:790000, fg:'#A44BE0' },
-  { id:'desk', name:'책상 1400', cat:'테이블', w:140, d:70, h:75, price:240000, fg:'#00A038' },
-  { id:'dining', name:'4인 식탁', cat:'테이블', w:140, d:80, h:75, price:420000, fg:'#00A038' },
-  { id:'shelf', name:'책장 800', cat:'수납', w:80, d:35, h:180, price:150000, fg:'#D97B00' },
-  { id:'ward', name:'옷장 1200', cat:'수납', w:120, d:60, h:200, price:680000, fg:'#D97B00' },
-];
+const FURN = [];  // 내장 예시 가구 제거 — 카탈로그는 공유(사용자 생성) 가구만 표시
 const DOOR = 80;
 const won = n => n.toLocaleString('ko-KR') + '원';
 
@@ -1367,7 +1357,7 @@ function App() {
   const fitOrient = (w,d) => w<=roomW && d<=roomD && (isPoly || roomW-w>=DOOR || roomD-d>=DOOR);
   const fitsAny = f => fitOrient(f.w,f.d) || fitOrient(f.d,f.w);
 
-  const sel = allFurn.find(f=>f.id===selId) || FURN[0];
+  const sel = allFurn.find(f=>f.id===selId) || allFurn[0] || { id:'_none', name:'', cat:'기타', kind:'box', w:100, d:100, h:100, price:0, fg:'#cccccc' };
   const _rad=(rotDeg||0)*Math.PI/180, _rc=Math.abs(Math.cos(_rad)), _rs=Math.abs(Math.sin(_rad));
   const effW = Math.round(sel.w*_rc + sel.d*_rs);
   const effD = Math.round(sel.w*_rs + sel.d*_rc);
