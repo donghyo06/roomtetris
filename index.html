@@ -165,6 +165,10 @@ const won = n => n.toLocaleString('ko-KR') + '원';
 
 /* ─── AI backend: key-hiding proxy(권장) 또는 각자 키로 직접 호출 ─── */
 const DEFAULT_PROXY = 'https://roomtetris-ai.dlehdgy2068.workers.dev';  // ← 배포한 프록시 Worker URL을 넣으면(예: 'https://roomtetris-ai.xxx.workers.dev') 사용자는 키 없이 사용
+// 공용 가구 카탈로그 Worker 주소(중복제거·공유·GLB 영구보관). 비우면 로컬 전용으로만 동작.
+const CATALOG_API = 'https://roomtetris-catalog.dlehdgy2068.workers.dev';
+const _catBase = ()=> (CATALOG_API||'').trim().replace(/\/$/,'');
+const _prodKey = (s)=>{ try{ const u=new URL(s); u.hash=''; [...u.searchParams.keys()].forEach(k=>{ if(/^(utm_|fbclid|gclid|ref|spm|_ga)/i.test(k)) u.searchParams.delete(k); }); return (u.origin+u.pathname+(u.search||'')).toLowerCase(); }catch(e){ return String(s||'').trim().toLowerCase(); } };
 function aiEndpoint(){
   let proxy=(DEFAULT_PROXY||'').trim();
   if(proxy.endsWith('/')) proxy=proxy.slice(0,-1);
@@ -1316,6 +1320,15 @@ function App() {
   const [aiName, setAiName] = useState('');
   const [aiNeedName, setAiNeedName] = useState(false);
   const allFurn = [...FURN, ...customFurn];
+  // 공용 카탈로그 불러와 목록에 합치기 (한 명이 만든 가구를 모두가 사용)
+  useEffect(() => { if (!_catBase()) return; let live = true;
+    fetch(_catBase() + '/catalog').then(r => r.json()).then(d => { if (!live || !d || !Array.isArray(d.items)) return;
+      setCustomFurn(cs => { const have = new Set(cs.map(x => x.id));
+        const add = d.items.filter(it => !have.has('shared_' + it.id)).map(it => ({
+          id: 'shared_' + it.id, name: it.name, cat: it.category || '기타', w: it.w, d: it.d, h: it.h,
+          price: it.price || 0, fg: it.color || '#B7A99A', kind: it.kind || 'box', custom: true, shared: true,
+          url: it.source || undefined, meshUrl: it.glbUrl || undefined })); return [...add, ...cs]; }); }).catch(() => {});
+    return () => { live = false; }; }, []);
   useEffect(() => {
     if (typeof THREE === 'undefined') return;
     let r; try { r = new THREE.WebGLRenderer({ alpha:true, antialias:true, preserveDrawingBuffer:true }); }
@@ -1561,9 +1574,21 @@ function App() {
             price:Math.max(0, Math.round(parseFloat(addForm.price)||0)), fg:cur[3], kind:cur[0], custom:true,
             url:addForm.url||undefined, modelCode:addForm.modelCode||undefined, meshUrl:addForm.meshUrl||undefined };
           setCustomFurn(cs=>[...cs, item]); setShowAdd(false); setAiUrl(''); setAiErr(null); setAiName(''); setAiNeedName(false);
-          setAddForm({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null, meshUrl:null }); };
+          setAddForm({ name:'', shape:'sofa', w:'', d:'', h:'', price:'', url:'', modelCode:null, meshUrl:null });
+          // 공용 카탈로그에 등록 → 다른 사용자도 사용(실물 GLB가 있고 링크가 있을 때만; 중복은 백엔드가 무시)
+          if(_catBase() && item.meshUrl && item.url){
+            fetch(_catBase()+'/catalog', { method:'POST', headers:{ 'content-type':'application/json' },
+              body:JSON.stringify({ url:item.url, glbUrl:item.meshUrl, name:item.name, category:item.cat,
+                w:item.w, d:item.d, h:item.h, color:item.fg, kind:item.kind, price:item.price }) }).catch(()=>{});
+          } };
         const runAi=async()=>{
           const u=aiUrl.trim(); if(!u||aiBusy) return;
+          // 이미 공용 카탈로그에 있는 상품이면 재사용(생성 비용 0)
+          const dup=allFurn.find(f=>f.url && _prodKey(f.url)===_prodKey(u));
+          if(dup){ const sh=shapes.find(x=>x[0]===dup.kind);
+            setAddForm(fm=>({ ...fm, name:dup.name, shape:sh?sh[0]:fm.shape, w:String(dup.w), d:String(dup.d), h:String(dup.h),
+              price:String(dup.price||0), url:u, meshUrl:dup.meshUrl||null, modelCode:dup.modelCode||null }));
+            setAiErr('이미 등록된 상품이라 기존 3D를 재사용했어요 (생성 비용 0).'); setAiBusy(false); return; }
           setAiBusy('fetch'); setAiErr(null);
           let info=null;
           try{
@@ -1582,7 +1607,10 @@ function App() {
             setAddForm(fm=>({ ...fm, name:info.name, shape:info.shape, w:String(info.w), d:String(info.d), h:String(info.h),
               price:String(info.price), url:u, modelCode:null, meshUrl:null }));
           }catch(e){ setAiErr(e&&e.message?String(e.message).slice(0,180):'가져오기에 실패했어요'); setAiBusy(false); return; }
-          if(info.image){
+          // 비용 절감: 박스형 가구(테이블·선반·옷장)는 유료 실물 3D 생성을 건너뛰고 절차적 생성으로.
+          // 소파·침대 등 형태가 복잡한 가구만 실물 3D를 만든다.
+          const _boxy = new Set(['table','shelf','wardrobe']);
+          if(info.image && !_boxy.has(info.shape)){
             setAiBusy('mesh');
             try{
               const cr=await fetch(DEFAULT_PROXY+'/meshy/image-to-3d', { method:'POST',
