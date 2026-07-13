@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RoomTetris 백엔드 진단</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css">
+<style>
+  :root { --accent:#0066FF; --pos:#00BF40; --neg:#FF4242; --warn:#D97B00; --ink:#111; --muted:#6b7280;
+    --line:rgba(0,0,0,0.08); --card:0 1px 2px rgba(16,24,40,.04), 0 8px 20px rgba(16,24,40,.06); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#F2F2F7; color:var(--ink); -webkit-font-smoothing:antialiased;
+    font-family:'Pretendard Variable',Pretendard,-apple-system,BlinkMacSystemFont,system-ui,sans-serif; }
+  .wrap { max-width:560px; margin:0 auto; padding:28px 16px calc(48px + env(safe-area-inset-bottom,0px)); }
+  h1 { font-size:22px; font-weight:800; margin:0; letter-spacing:-0.01em; }
+  .sub { font-size:13px; color:var(--muted); margin-top:6px; line-height:1.55; }
+  .sub code { background:rgba(0,0,0,.05); border-radius:6px; padding:1px 5px; font-size:12px; }
+  .summary { margin-top:16px; border-radius:14px; padding:12px 14px; font-size:14px; font-weight:700; display:none; }
+  .summary.ok  { display:block; background:rgba(0,191,64,.10);  color:var(--pos); }
+  .summary.bad { display:block; background:rgba(255,66,66,.08); color:var(--neg); }
+  .summary.mix { display:block; background:rgba(217,123,0,.10); color:var(--warn); }
+  .card { background:#fff; border-radius:18px; box-shadow:var(--card); padding:14px 16px; margin-top:12px; }
+  .row { display:flex; align-items:center; gap:10px; }
+  .pill { flex:none; font-size:12px; font-weight:800; border-radius:99px; padding:4px 10px;
+    background:rgba(0,0,0,.05); color:var(--muted); min-width:52px; text-align:center; }
+  .pill.run  { background:rgba(0,102,255,.10); color:var(--accent); }
+  .pill.ok   { background:rgba(0,191,64,.12);  color:var(--pos); }
+  .pill.warn { background:rgba(217,123,0,.12); color:var(--warn); }
+  .pill.bad  { background:rgba(255,66,66,.10); color:var(--neg); }
+  .name { font-size:15px; font-weight:700; }
+  .dep { font-size:11px; color:var(--muted); font-weight:600; margin-left:auto; }
+  .verdict { font-size:13.5px; line-height:1.6; margin-top:8px; color:var(--ink); word-break:break-word; }
+  .verdict.muted { color:var(--muted); }
+  details { margin-top:8px; }
+  summary { font-size:12px; color:var(--muted); cursor:pointer; user-select:none; }
+  pre { margin:8px 0 0; background:#0f172a; color:#e2e8f0; border-radius:12px; padding:12px;
+    font-size:11.5px; line-height:1.5; overflow:auto; max-height:220px; white-space:pre-wrap; word-break:break-all; }
+  .btns { display:flex; gap:10px; margin-top:18px; }
+  button { font-family:inherit; font-size:15px; font-weight:800; border:0; border-radius:14px;
+    padding:14px 18px; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  #run { flex:1; background:var(--accent); color:#fff; box-shadow:0 6px 16px rgba(0,102,255,.25); }
+  #run:disabled { opacity:.5; box-shadow:none; }
+  #copy { background:#fff; color:var(--ink); box-shadow:var(--card); display:none; }
+  .foot { font-size:11.5px; color:var(--muted); margin-top:14px; line-height:1.6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>RoomTetris 백엔드 진단</h1>
+  <p class="sub">앱이 사용하는 워커 2대를 앱과 동일한 조건으로 검사합니다.<br>
+    AI 프록시 <code id="u-ai"></code><br>카탈로그 <code id="u-cat"></code></p>
+
+  <div id="summary" class="summary"></div>
+
+  <div class="card" id="c1">
+    <div class="row"><span class="pill" id="p1">대기</span><span class="name">1 · AI 프록시 → Anthropic API</span><span class="dep">3D 생성의 핵심 경로</span></div>
+    <div class="verdict muted" id="v1">claude-sonnet-5로 초소형 호출을 보내 키·헤더·body 전달을 확인합니다.</div>
+    <details id="d1" style="display:none"><summary>원본 응답 보기</summary><pre id="r1"></pre></details>
+  </div>
+
+  <div class="card" id="c2">
+    <div class="row"><span class="pill" id="p2">대기</span><span class="name">2 · Meshy 라우트/키</span><span class="dep">실물 3D(GLB) 경로</span></div>
+    <div class="verdict muted" id="v2">가짜 작업 ID를 조회해 라우팅과 MESHY_API_KEY만 확인합니다. 유료 변환 작업은 생성하지 않습니다.</div>
+    <details id="d2" style="display:none"><summary>원본 응답 보기</summary><pre id="r2"></pre></details>
+  </div>
+
+  <div class="card" id="c3">
+    <div class="row"><span class="pill" id="p3">대기</span><span class="name">3 · 공유 카탈로그 워커</span><span class="dep">부가 기능</span></div>
+    <div class="verdict muted" id="v3">앱이 시작 시 호출하는 GET /catalog 응답 형식을 확인합니다.</div>
+    <details id="d3" style="display:none"><summary>원본 응답 보기</summary><pre id="r3"></pre></details>
+  </div>
+
+  <div class="btns">
+    <button id="run">검사 시작</button>
+    <button id="copy">결과 복사</button>
+  </div>
+  <p class="foot">· 검사 1은 Anthropic 초소형 호출 1회를 실제로 보냅니다(64토큰 한도, 1원 미만).<br>
+    · 이 페이지는 저장소 루트에 올려 <b>사이트 주소로</b> 열어야 앱과 같은 origin(CORS 조건)에서 검사됩니다. 로컬 파일로 열면 연결 실패가 CORS 때문인지 구분되지 않습니다.</p>
+</div>
+
+<script>
+const AI  = 'https://roomtetris-ai.dlehdgy2068.workers.dev';
+const CAT = 'https://roomtetris-catalog.dlehdgy2068.workers.dev';
+document.getElementById('u-ai').textContent = AI;
+document.getElementById('u-cat').textContent = CAT;
+
+const $ = id => document.getElementById(id);
+const report = [];
+function setPill(n, cls, label){ const p=$('p'+n); p.className='pill '+cls; p.textContent=label; }
+function setVerdict(n, cls, msg, raw){
+  const v=$('v'+n); v.className='verdict'; v.textContent=msg;
+  setPill(n, cls, cls==='ok'?'정상':cls==='warn'?'주의':cls==='bad'?'문제':'검사 중');
+  if(raw!==undefined){ $('d'+n).style.display='block'; $('r'+n).textContent=raw; }
+  report.push('['+(cls==='ok'?'정상':cls==='warn'?'주의':'문제')+'] 검사'+n+': '+msg);
+}
+async function req(url, opt){
+  const r = await fetch(url, opt);
+  const text = await r.text();
+  let json=null; try{ json=JSON.parse(text); }catch(_){}
+  return { status:r.status, ok:r.ok, text, json };
+}
+const snip = t => (t||'').slice(0, 1200);
+
+async function check1(){
+  setPill(1,'run','검사 중');
+  const body = JSON.stringify({ model:'claude-sonnet-5', max_tokens:64, thinking:{ type:'disabled' },
+    messages:[{ role:'user', content:'ping 이라고 한 단어만 답해' }] });
+  let r;
+  try{ r = await req(AI, { method:'POST', headers:{ 'content-type':'application/json' }, body }); }
+  catch(e){
+    setVerdict(1,'bad','워커에 연결하지 못했습니다 — 워커 미배포, 주소 오류, 또는 CORS 차단입니다. 이 페이지를 사이트 주소(github.io)로 열었는데도 이 메시지가 나오면 백엔드(워커)가 원인입니다. ('+e.message+')');
+    return false;
+  }
+  const emsg = (r.json && r.json.error && r.json.error.message) || '';
+  if(!r.ok){
+    let msg;
+    if(r.status===401) msg='Anthropic 인증 실패(401) — 워커에 설정된 ANTHROPIC_API_KEY가 없거나 잘못됐습니다. 백엔드가 원인입니다.';
+    else if(r.status===400 && /anthropic-version/i.test(emsg)) msg='워커가 anthropic-version 헤더를 추가하지 않고 있습니다(400). 백엔드 수정 필요.';
+    else if(r.status===400 && /credit|billing|balance/i.test(emsg)) msg='Anthropic 크레딧 부족(400) — 콘솔에서 잔액을 충전해야 합니다. 백엔드(계정) 문제입니다.';
+    else if(r.status===404 && /model/i.test(emsg)) msg='모델을 찾을 수 없음(404) — 워커가 model 필드를 다른 값으로 덮어쓰는지 확인하세요.';
+    else if(r.status===429) msg='요청 한도 초과(429) — 잠시 후 다시 검사해 보세요.';
+    else msg='HTTP '+r.status+' — '+(emsg || snip(r.text) || '본문 없음');
+    setVerdict(1,'bad',msg, snip(r.text));
+    return false;
+  }
+  if(r.json && Array.isArray(r.json.content)){
+    if(r.json.model && r.json.model.indexOf('claude-sonnet-5')!==0){
+      setVerdict(1,'warn','호출 자체는 성공했지만 응답 모델이 '+r.json.model+' 입니다 — 워커가 요청 body(model)를 덮어쓰고 있습니다. max_tokens도 덮어쓸 가능성이 있으니 워커 코드에서 body를 그대로 전달하도록 고쳐야 합니다.', snip(r.text));
+      return false;
+    }
+    setVerdict(1,'ok','Anthropic 경유 정상 — 키·헤더 OK, 요청 body 그대로 전달됨(model 일치, stop_reason='+r.json.stop_reason+'). 이 경로는 백엔드 원인이 아닙니다.', snip(r.text));
+    return true;
+  }
+  setVerdict(1,'warn','HTTP 200이지만 Anthropic 응답 형식이 아닙니다 — 워커가 응답을 변형하고 있을 수 있습니다.', snip(r.text));
+  return false;
+}
+
+async function check2(){
+  setPill(2,'run','검사 중');
+  let r;
+  try{ r = await req(AI + '/meshy/task/diag-ping'); }
+  catch(e){ setVerdict(2,'bad','워커에 연결하지 못했습니다 ('+e.message+')'); return false; }
+  if(r.status===401 || r.status===403){
+    setVerdict(2,'bad','Meshy 인증 실패('+r.status+') — 워커의 MESHY_API_KEY가 없거나 잘못됐습니다. 소파·침대의 실물 3D가 안 되는 원인입니다.', snip(r.text));
+    return false;
+  }
+  if(r.json){
+    setVerdict(2,'ok','Meshy 라우팅·키 정상 — 가짜 ID라 "작업 없음" 계열 응답이 오는 것이 정상입니다. (HTTP '+r.status+')', snip(r.text));
+    return true;
+  }
+  setVerdict(2,'bad','/meshy/task 경로가 JSON을 반환하지 않습니다(HTTP '+r.status+') — 워커에 해당 라우트가 없거나 오류 페이지를 반환 중입니다.', snip(r.text));
+  return false;
+}
+
+async function check3(){
+  setPill(3,'run','검사 중');
+  let r;
+  try{ r = await req(CAT + '/catalog'); }
+  catch(e){ setVerdict(3,'bad','카탈로그 워커에 연결하지 못했습니다 ('+e.message+') — 공유 가구 목록만 영향, 3D 생성과는 무관합니다.'); return false; }
+  if(r.ok && r.json && Array.isArray(r.json.items)){
+    setVerdict(3,'ok','카탈로그 정상 — 공유 항목 '+r.json.items.length+'개.', snip(r.text));
+    return true;
+  }
+  setVerdict(3,'warn','응답이 {items:[...]} 형식이 아닙니다(HTTP '+r.status+') — 공유 카탈로그만 영향, 3D 생성 실패의 원인은 아닙니다.', snip(r.text));
+  return false;
+}
+
+$('run').addEventListener('click', async ()=>{
+  $('run').disabled = true; $('run').textContent = '검사 중…';
+  report.length = 0;
+  report.push('RoomTetris 백엔드 진단 · ' + new Date().toLocaleString('ko-KR') + ' · origin=' + location.origin);
+  const ok1 = await check1();
+  const ok2 = await check2();
+  const ok3 = await check3();
+  const s = $('summary');
+  if(ok1 && ok2){ s.className='summary ok'; s.textContent='✅ 핵심 경로(AI 프록시·Meshy) 모두 정상 — 3D 생성 실패는 백엔드가 아니라 프런트엔드(max_tokens) 원인으로 확정할 수 있습니다.'; }
+  else if(!ok1){ s.className='summary bad'; s.textContent='❌ AI 프록시 경로에 문제 — 백엔드도 원인입니다. 검사 1의 안내를 따라 워커를 수정하세요.'; }
+  else { s.className='summary mix'; s.textContent='⚠️ 일부 경로에 문제 — 각 카드의 안내를 확인하세요.'; }
+  report.unshift(s.textContent);
+  $('run').disabled = false; $('run').textContent = '다시 검사';
+  $('copy').style.display = 'block';
+});
+
+$('copy').addEventListener('click', async ()=>{
+  const t = report.join('\n');
+  try{ await navigator.clipboard.writeText(t); $('copy').textContent='복사됨 ✓'; }
+  catch(_){ prompt('아래 내용을 길게 눌러 복사하세요', t); }
+  setTimeout(()=>{ $('copy').textContent='결과 복사'; }, 1500);
+});
+</script>
+</body>
+</html>
