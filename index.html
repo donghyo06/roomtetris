@@ -1599,10 +1599,7 @@ function App() {
             setAddForm(fm=>({ ...fm, name:info.name, shape:info.shape, w:String(info.w), d:String(info.d), h:String(info.h),
               price:String(info.price), url:u, modelCode:null, meshUrl:null, meshRaw:null }));
           }catch(e){ setAiErr(e&&e.message?String(e.message).slice(0,180):'가져오기에 실패했어요'); setAiBusy(false); return; }
-          // 비용 절감: 박스형 가구(테이블·선반·옷장)는 유료 실물 3D 생성을 건너뛰고 절차적 생성으로.
-          // 소파·침대 등 형태가 복잡한 가구만 실물 3D를 만든다.
-          const _boxy = new Set(['table','shelf','wardrobe']);
-          if(info.image && !_boxy.has(info.shape)){
+          if(info.image){
             setAiBusy('mesh');
             try{
               const cr=await fetch(DEFAULT_PROXY+'/meshy/image-to-3d', { method:'POST',
