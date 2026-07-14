@@ -1319,7 +1319,7 @@ function App() {
         const add = d.items.filter(it => !have.has('shared_' + it.id)).map(it => ({
           id: 'shared_' + it.id, name: it.name, cat: it.category || '기타', w: it.w, d: it.d, h: it.h,
           price: it.price || 0, fg: it.color || '#B7A99A', kind: it.kind || 'box', custom: true, shared: true,
-          url: it.source || undefined, meshUrl: it.glbUrl || undefined })); return [...add, ...cs]; }); }).catch(() => {});
+          url: it.source || undefined, meshUrl: it.glbUrl || undefined, modelCode: it.modelCode || undefined })); return [...add, ...cs]; }); }).catch(() => {});
     return () => { live = false; }; }, []);
   useEffect(() => {
     if (typeof THREE === 'undefined') return;
@@ -1570,7 +1570,7 @@ function App() {
           // 공용 카탈로그에 등록 → 다른 사용자도 사용(링크가 있으면; GLB 있으면 실물, 없으면 도형. 중복은 백엔드가 무시)
           if(_catBase() && item.url){
             fetch(_catBase()+'/catalog', { method:'POST', headers:{ 'content-type':'application/json' },
-              body:JSON.stringify({ url:item.url, glbUrl:item.meshRaw||item.meshUrl||undefined, name:item.name, category:item.cat,
+              body:JSON.stringify({ url:item.url, glbUrl:item.meshRaw||item.meshUrl||undefined, modelCode:item.modelCode||undefined, name:item.name, category:item.cat,
                 w:item.w, d:item.d, h:item.h, color:item.fg, kind:item.kind, price:item.price }) }).catch(()=>{});
           } };
         const runAi=async()=>{
